@@ -1,6 +1,7 @@
 from __future__ import annotations
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
+import re
 
 import io
 import pandas as pd
@@ -26,11 +27,17 @@ def parse_documents_to_chunks(file_paths: List[str], target_chunk_size: int = 12
             chunks.extend(_parse_docx(path, target_chunk_size, overlap))
         else:
             chunks.extend(_parse_excel(path))
-    # add lightweight index fields: length and keywords heuristic (first words)
+    # Enhanced metadata extraction for better context awareness
     for ch in chunks:
         text = ch.get("text", "")
         ch["length"] = len(text)
         ch["keywords"] = " ".join(text.split()[:12])
+        
+        # Extract technical metadata
+        ch["technical_metadata"] = _extract_technical_metadata(text)
+        ch["safety_metadata"] = _extract_safety_metadata(text)
+        ch["equipment_metadata"] = _extract_equipment_metadata(text)
+        
     return chunks
 
 
@@ -127,4 +134,259 @@ def _parse_excel(path: Path) -> List[Dict[str, Any]]:
             })
     except Exception as e:
         chunks.append({"source": path.name, "type": "error", "text": f"Excel parse error: {e}"})
-    return chunks 
+    return chunks
+
+
+def _extract_technical_metadata(text: str) -> Dict[str, Any]:
+    """Extract technical parameters and specifications from text"""
+    metadata = {
+        "parameters": [],
+        "specifications": [],
+        "ranges": [],
+        "settings": []
+    }
+    
+    # Temperature patterns
+    temp_patterns = [
+        r'(\d+(?:\.\d+)?)\s*[°℃]\s*[CF]?',
+        r'температур[аеы]\s*(\d+(?:\.\d+)?)',
+        r'temp\w*\s*[:=]\s*(\d+(?:\.\d+)?)'
+    ]
+    
+    # Pressure patterns  
+    pressure_patterns = [
+        r'(\d+(?:\.\d+)?)\s*(?:бар|bar|Па|Pa|атм|atm|мм\.?рт\.?ст\.?)',
+        r'давлени[еия]\s*(\d+(?:\.\d+)?)',
+        r'pressure\s*[:=]\s*(\d+(?:\.\d+)?)'
+    ]
+    
+    # Time patterns
+    time_patterns = [
+        r'(\d+(?:\.\d+)?)\s*(?:сек|sec|мин|min|час|hour|ч|h)',
+        r'время\s*(\d+(?:\.\d+)?)',
+        r'продолжительност[ьи]\s*(\d+(?:\.\d+)?)'
+    ]
+    
+    # Volume/mass patterns
+    volume_patterns = [
+        r'(\d+(?:\.\d+)?)\s*(?:мл|ml|л|l|г|g|кг|kg)',
+        r'объ[её]м\s*(\d+(?:\.\d+)?)',
+        r'масс[аы]\s*(\d+(?:\.\d+)?)'
+    ]
+    
+    all_patterns = {
+        'temperature': temp_patterns,
+        'pressure': pressure_patterns, 
+        'time': time_patterns,
+        'volume': volume_patterns
+    }
+    
+    text_lower = text.lower()
+    
+    for param_type, patterns in all_patterns.items():
+        for pattern in patterns:
+            matches = re.findall(pattern, text_lower, re.IGNORECASE)
+            if matches:
+                metadata["parameters"].extend([f"{param_type}: {m}" for m in matches[:3]])
+    
+    # Extract specification tables and lists
+    spec_patterns = [
+        r'спецификаци[ияй].*?(?=\n\n|\Z)',
+        r'характеристик[аи].*?(?=\n\n|\Z)',  
+        r'модель[ьи]?\s*[:=]\s*([^\n]+)',
+        r'артикул\s*[:=]\s*([^\n]+)',
+        r'серийный\s+номер\s*[:=]\s*([^\n]+)'
+    ]
+    
+    for pattern in spec_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+        metadata["specifications"].extend(matches[:5])
+    
+    # Extract ranges and tolerances
+    range_patterns = [
+        r'(\d+(?:\.\d+)?)\s*[-±]\s*(\d+(?:\.\d+)?)',
+        r'от\s+(\d+(?:\.\d+)?)\s+до\s+(\d+(?:\.\d+)?)',
+        r'(\d+(?:\.\d+)?)\s*\.{2,}\s*(\d+(?:\.\d+)?)',
+        r'≤\s*(\d+(?:\.\d+)?)|≥\s*(\d+(?:\.\d+)?)|<\s*(\d+(?:\.\d+)?)|>\s*(\d+(?:\.\d+)?)'
+    ]
+    
+    for pattern in range_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        metadata["ranges"].extend([str(m) for m in matches[:5]])
+    
+    return metadata
+
+
+def _extract_safety_metadata(text: str) -> Dict[str, Any]:
+    """Extract safety-related information from text"""
+    metadata = {
+        "hazards": [],
+        "ppe_requirements": [],
+        "warnings": [],
+        "emergency_procedures": []
+    }
+    
+    text_lower = text.lower()
+    
+    # Hazard identification
+    hazard_patterns = [
+        r'опасност[ьи].*?(?=\n|\.|!)',
+        r'риск.*?(?=\n|\.|!)',
+        r'вредн.*?(?=\n|\.|!)',
+        r'токсичн.*?(?=\n|\.|!)',
+        r'взрывоопасн.*?(?=\n|\.|!)',
+        r'коррозионн.*?(?=\n|\.|!)',
+        r'radiation|радиаци.*?(?=\n|\.|!)'
+    ]
+    
+    for pattern in hazard_patterns:
+        matches = re.findall(pattern, text_lower, re.IGNORECASE)
+        metadata["hazards"].extend(matches[:3])
+    
+    # PPE requirements
+    ppe_patterns = [
+        r'сиз|защитн[аыое]\s+(?:средств[ао]|экипировк[аи]|одежд[аы]|очк[аи]|перчатк[аи]|респиратор)',
+        r'очк[аи].*?защит',
+        r'перчатк[аи].*?(?:нитрил|латекс|резин)',
+        r'респиратор.*?(?:класс|фильтр)',
+        r'халат|фартук|костюм.*?защит',
+        r'обув[ьи].*?(?:безопасност|защит|нескользящ)'
+    ]
+    
+    for pattern in ppe_patterns:
+        matches = re.findall(pattern, text_lower, re.IGNORECASE)
+        metadata["ppe_requirements"].extend(matches[:5])
+    
+    # Warning indicators
+    warning_patterns = [
+        r'внимание[!:].*?(?=\n\n|\Z)',
+        r'предупреждение[!:].*?(?=\n\n|\Z)',
+        r'осторожно[!:].*?(?=\n\n|\Z)',
+        r'danger|warning|caution.*?(?=\n|\.|!)'
+    ]
+    
+    for pattern in warning_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+        metadata["warnings"].extend(matches[:3])
+    
+    # Emergency procedures
+    emergency_patterns = [
+        r'аварийн.*?процедур.*?(?=\n\n|\Z)',
+        r'экстренн.*?действи.*?(?=\n\n|\Z)',
+        r'первая\s+помощ.*?(?=\n\n|\Z)',
+        r'эвакуаци.*?(?=\n\n|\Z)',
+        r'emergency.*?procedure.*?(?=\n\n|\Z)'
+    ]
+    
+    for pattern in emergency_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+        metadata["emergency_procedures"].extend(matches[:3])
+    
+    return metadata
+
+
+def _extract_equipment_metadata(text: str) -> Dict[str, Any]:
+    """Extract equipment specifications and setup information"""
+    metadata = {
+        "equipment_names": [],
+        "model_numbers": [],
+        "settings": [],
+        "calibration": [],
+        "maintenance": []
+    }
+    
+    text_lower = text.lower()
+    
+    # Equipment identification
+    equipment_patterns = [
+        r'(?:анализатор|спектрометр|хроматограф|микроскоп|весы|насос|центрифуг[аы])\s*[^\n]{0,50}',
+        r'модель\s*[:=]?\s*([A-Z0-9-]+[^\n]{0,30})',
+        r'серийный\s*номер\s*[:=]?\s*([A-Z0-9-]+)',
+        r'производитель\s*[:=]?\s*([^\n]{5,30})',
+        r'оборудование.*?(?=\n\n|\Z)'
+    ]
+    
+    for pattern in equipment_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        metadata["equipment_names"].extend([str(m) for m in matches[:5]])
+    
+    # Settings and configurations
+    settings_patterns = [
+        r'настройк[аи].*?(?=\n\n|\Z)',
+        r'параметр[ыи]\s*[:=].*?(?=\n\n|\Z)',
+        r'режим\s*[:=]?\s*([^\n]{5,50})',
+        r'скорост[ьи]\s*[:=]?\s*(\d+[^\n]{0,20})',
+        r'частот[аы]\s*[:=]?\s*(\d+[^\n]{0,20})'
+    ]
+    
+    for pattern in settings_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+        metadata["settings"].extend([str(m) for m in matches[:5]])
+    
+    # Calibration procedures
+    calibration_patterns = [
+        r'калибровк[аи].*?(?=\n\n|\Z)',
+        r'поверк[аи].*?(?=\n\n|\Z)',
+        r'стандарт.*?образц.*?(?=\n\n|\Z)',
+        r'эталон.*?(?=\n\n|\Z)'
+    ]
+    
+    for pattern in calibration_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+        metadata["calibration"].extend(matches[:3])
+    
+    return metadata
+
+
+def create_enhanced_corpus_summary(chunks: List[Dict[str, Any]]) -> str:
+    """Create enhanced summary focusing on technical details and safety"""
+    
+    all_technical = []
+    all_safety = []
+    all_equipment = []
+    
+    for chunk in chunks:
+        tech_meta = chunk.get("technical_metadata", {})
+        safety_meta = chunk.get("safety_metadata", {})
+        equipment_meta = chunk.get("equipment_metadata", {})
+        
+        all_technical.extend(tech_meta.get("parameters", []))
+        all_technical.extend(tech_meta.get("specifications", []))
+        all_technical.extend(tech_meta.get("ranges", []))
+        
+        all_safety.extend(safety_meta.get("hazards", []))
+        all_safety.extend(safety_meta.get("ppe_requirements", []))
+        all_safety.extend(safety_meta.get("warnings", []))
+        
+        all_equipment.extend(equipment_meta.get("equipment_names", []))
+        all_equipment.extend(equipment_meta.get("settings", []))
+    
+    # Remove duplicates while preserving order
+    unique_technical = list(dict.fromkeys(all_technical))[:15]
+    unique_safety = list(dict.fromkeys(all_safety))[:10]  
+    unique_equipment = list(dict.fromkeys(all_equipment))[:10]
+    
+    summary_parts = []
+    
+    if unique_technical:
+        summary_parts.append("ТЕХНИЧЕСКИЕ ПАРАМЕТРЫ И СПЕЦИФИКАЦИИ:")
+        summary_parts.extend([f"- {item}" for item in unique_technical])
+        summary_parts.append("")
+    
+    if unique_safety:
+        summary_parts.append("БЕЗОПАСНОСТЬ И МЕРЫ ПРЕДОСТОРОЖНОСТИ:")
+        summary_parts.extend([f"- {item}" for item in unique_safety])  
+        summary_parts.append("")
+    
+    if unique_equipment:
+        summary_parts.append("ОБОРУДОВАНИЕ И НАСТРОЙКИ:")
+        summary_parts.extend([f"- {item}" for item in unique_equipment])
+        summary_parts.append("")
+    
+    # Add general text chunks as context
+    text_chunks = [ch.get("text", "")[:200] for ch in chunks[:5] if ch.get("text")]
+    if text_chunks:
+        summary_parts.append("ДОПОЛНИТЕЛЬНЫЙ КОНТЕКСТ:")
+        summary_parts.extend([f"- {chunk}..." for chunk in text_chunks])
+    
+    return "\n".join(summary_parts) 

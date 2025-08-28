@@ -7,6 +7,7 @@ from autogen_agentchat.teams import RoundRobinGroupChat
 
 from config.agent_config import AGENT_DEFAULTS, build_openai_chat_client
 from config.prompts import COORDINATOR_SYSTEM_PROMPT
+from utils.section_validator import SOPSectionValidator
 
 
 def build_coordinator(on_log: Callable[[str], None] | None = None) -> AssistantAgent:
@@ -61,10 +62,11 @@ def orchestrate_workflow(
 
 
 def _extract_clean_sop_content(raw_content: str) -> str:
-    """Extract clean SOP content, removing agent conversation artifacts."""
+    """Extract clean SOP content, removing agent conversation artifacts and duplications."""
     lines = raw_content.split('\n')
     clean_lines = []
     skip_sections = False
+    seen_headers = set()
     
     for line in lines:
         line_lower = line.lower().strip()
@@ -75,14 +77,23 @@ def _extract_clean_sop_content(raw_content: str) -> str:
             'дополнительные рекомендации:', 'критик:', 'безопасность:',
             'контроль качества:', 'стилизация:', 'генератор:',
             'сгенерируй соп', 'разделы и режимы', 'требования:',
-            'учти критику', 'оцени документ', 'текст:', 'замечания качества:'
+            'учти критику', 'оцени документ', 'текст:', 'замечания качества:',
+            'создай профессиональный', 'обязательные требования', 'структура документа'
         ]):
             skip_sections = True
             continue
             
         # Resume when we hit actual content headers
-        if line.strip().startswith('#') or (line.strip().startswith('**') and line.strip().endswith('**')):
+        if line.strip().startswith('#') or (line.strip().startswith('**') and line.strip().endswith('**') and len(line.strip()) > 4):
             skip_sections = False
+            
+            # Check for duplicate headers
+            header_text = line.strip().lower()
+            if header_text in seen_headers:
+                skip_sections = True
+                continue
+            else:
+                seen_headers.add(header_text)
             
         # Skip empty lines when in skip mode
         if skip_sections and not line.strip():
@@ -92,11 +103,22 @@ def _extract_clean_sop_content(raw_content: str) -> str:
         if not skip_sections:
             clean_lines.append(line)
     
-    return '\n'.join(clean_lines).strip()
+    # Post-processing: remove duplicate consecutive empty lines
+    final_lines = []
+    prev_empty = False
+    
+    for line in clean_lines:
+        is_empty = not line.strip()
+        if is_empty and prev_empty:
+            continue
+        final_lines.append(line)
+        prev_empty = is_empty
+    
+    return '\n'.join(final_lines).strip()
 
 
 def iterative_generate_until_approved(
-    coordinator: AssistantAgent,  # Kept for compatibility but not used in single-agent calls
+    coordinator: AssistantAgent,  # Kept for compatibility
     sop_gen: AssistantAgent,
     safety: AssistantAgent,
     critic: AssistantAgent,
@@ -157,15 +179,54 @@ def iterative_generate_until_approved(
             _log(f"Ошибка контроля качества: {e}")
             break
 
+        _log("Валидация структуры документа...")
+        validator = SOPSectionValidator()
+        validation_results = validator.comprehensive_validation(clean_sop_content)
+        
+        validation_feedback = ""
+        if not validation_results["overall_assessment"]["is_production_ready"]:
+            recommendations = "\n".join(validation_results["recommendations"])
+            missing_sections = ", ".join(validation_results["section_analysis"]["missing_sections"])
+            
+            validation_feedback = f"""
+СТРУКТУРНЫЕ ПРОБЛЕМЫ:
+- Отсутствующие разделы: {missing_sections}
+- Общее качество: {validation_results["overall_assessment"]["quality_score"]:.1%}
+- Рекомендации: {recommendations}
+
+ТЕХНИЧЕСКАЯ ДЕТАЛИЗАЦИЯ: {'Недостаточно' if not validation_results["technical_analysis"]["has_sufficient_detail"] else 'Достаточно'}
+ИНТЕГРАЦИЯ БЕЗОПАСНОСТИ: {'Недостаточно' if not validation_results["safety_analysis"]["has_integrated_safety"] else 'Достаточно'}
+"""
+            _log(f"Валидация: найдено {len(validation_results['section_analysis']['missing_sections'])} проблем")
+        else:
+            _log("Валидация: структура соответствует требованиям")
+
         _log("Рецензирование критиком...")
         try:
-            critic_msgs = _run_agent_and_get_messages(
-                critic,
-                f"Оцени документ по протоколу (SUMMARY/ISSUES/STATUS).\nТЕКСТ:\n{clean_sop_content}\n\nЗАМЕЧАНИЯ БЕЗОПАСНОСТИ:\n{safety_feedback}\n\nЗАМЕЧАНИЯ КАЧЕСТВА:\n{quality_feedback}",
-            )
+            critic_prompt = f"""Оцени документ по протоколу (SUMMARY/ISSUES/STATUS).
+
+ТЕКСТ СОП:
+{clean_sop_content}
+
+ЗАМЕЧАНИЯ БЕЗОПАСНОСТИ:
+{safety_feedback}
+
+ЗАМЕЧАНИЯ КАЧЕСТВА:
+{quality_feedback}
+
+РЕЗУЛЬТАТЫ СТРУКТУРНОЙ ВАЛИДАЦИИ:
+{validation_feedback}
+"""
+            critic_msgs = _run_agent_and_get_messages(critic, critic_prompt)
             critic_texts = [m.content for m in critic_msgs if isinstance(m, TextMessage)]
             feedback = "\n\n".join(critic_texts)
             status_approved = any("STATUS:" in t and "APPROVED" in t for t in critic_texts)
+            
+            # Override approval if structure validation failed
+            if not validation_results["overall_assessment"]["is_production_ready"]:
+                status_approved = False
+                feedback += f"\n\nСТРУКТУРНАЯ ВАЛИДАЦИЯ: REVISE\n{validation_feedback}"
+            
             _log(f"Статус критика: {'APPROVED' if status_approved else 'REVISE'}")
         except Exception as e:
             _log(f"Ошибка критика: {e}")

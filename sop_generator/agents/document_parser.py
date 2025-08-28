@@ -3,7 +3,7 @@ from autogen_agentchat.agents import AssistantAgent
 
 from config.agent_config import AGENT_DEFAULTS, build_openai_chat_client
 from config.prompts import DOCUMENT_PARSER_SYSTEM_PROMPT
-from utils.document_processor import parse_documents_to_chunks
+from utils.document_processor import parse_documents_to_chunks, create_enhanced_corpus_summary
 
 
 def build_document_parser() -> AssistantAgent:
@@ -17,7 +17,17 @@ def build_document_parser() -> AssistantAgent:
 
 
 def summarize_parsed_chunks(chunks: List[Dict[str, Any]]) -> str:
-    # Simple heuristic to summarize parsed text chunks for conditioning the generator
+    """Create enhanced summary of parsed chunks with technical focus"""
+    if not chunks:
+        return ""
+    
+    # Use the enhanced corpus summary that extracts technical details
+    enhanced_summary = create_enhanced_corpus_summary(chunks)
+    
+    if enhanced_summary:
+        return enhanced_summary
+    
+    # Fallback to original method if enhanced summary fails
     texts = []
     for ch in chunks[:20]:
         prefix = f"[src: {ch.get('source','unknown')}] "

@@ -59,5 +59,3 @@ coverage.xml
 # OS
 Thumbs.db
 .DS_Store
-
-OAI_CONFIG_LIST.json

@@ -45,27 +45,27 @@ AGENT_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
     "sop_generator": {
         "name": "SOP_Generator",
-        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.4, "max_tokens": 800},
+        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.3, "max_tokens": 2000},  # Increased for detailed SOPs
     },
     "document_parser": {
         "name": "Document_Parser",
-        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.2, "max_tokens": 600},
+        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.2, "max_tokens": 800},  # Increased for better extraction
     },
     "content_styler": {
         "name": "Content_Styler",
-        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.2, "max_tokens": 400},
+        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.2, "max_tokens": 600},  # Increased for styling
     },
     "critic": {
         "name": "Critic",
-        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.2, "max_tokens": 300},
+        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.2, "max_tokens": 500},  # Increased for detailed feedback
     },
     "quality_checker": {
         "name": "Quality_Checker",
-        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.2, "max_tokens": 200},
+        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.2, "max_tokens": 400},  # Increased for detailed QC
     },
     "safety_agent": {
         "name": "Safety_Agent",
-        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.2, "max_tokens": 200},
+        "llm_config": {**DEFAULT_LLM.to_dict(), "temperature": 0.2, "max_tokens": 400},  # Increased for safety details
     },
 }
 
