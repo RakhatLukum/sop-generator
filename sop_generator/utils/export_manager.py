@@ -3,13 +3,12 @@ from typing import Dict, Any, List
 from docx import Document
 from docx.shared import Pt
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
-import os
+import re
 from pathlib import Path
 
 
@@ -24,8 +23,39 @@ def populate_docx(document: Document, sop_meta: Dict[str, Any], sections: List[D
     for idx, section in enumerate(sections, start=1):
         document.add_heading(f"{idx}. {section['title']}", level=1)
         body = section.get("content", "")
-        for para in body.split("\n\n"):
-            document.add_paragraph(para)
+        
+        # Split content into paragraphs and handle tables
+        paragraphs = body.split("\n\n")
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+                
+            # Check if it's a table
+            if '|' in para and ('---' in para or '━' in para):
+                # Handle markdown table
+                lines = para.split('\n')
+                table_data = []
+                for line in lines:
+                    if '|' in line and not (line.strip().startswith('|---') or line.strip().startswith('|━')):
+                        cells = [cell.strip() for cell in line.split('|') if cell.strip()]
+                        if cells:
+                            table_data.append(cells)
+                
+                if table_data:
+                    # Add table to document
+                    table = document.add_table(rows=len(table_data), cols=len(table_data[0]) if table_data else 1)
+                    table.style = 'Light Grid Accent 1'
+                    for row_idx, row_data in enumerate(table_data):
+                        for col_idx, cell_data in enumerate(row_data):
+                            if col_idx < len(table.rows[row_idx].cells):
+                                table.rows[row_idx].cells[col_idx].text = cell_data
+            else:
+                # Regular paragraph - handle basic markdown
+                # Remove markdown formatting for DOCX (since DOCX handles styling differently)
+                clean_para = re.sub(r'\*\*(.*?)\*\*', r'\1', para)  # Remove bold markers
+                clean_para = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', r'\1', clean_para)  # Remove italic markers
+                document.add_paragraph(clean_para)
     return document
 
 
@@ -57,7 +87,7 @@ def export_to_pdf(sections: List[Dict[str, Any]], output_path: str, sop_meta: Di
     
     # Create custom style that handles UTF-8
     from reportlab.lib.styles import ParagraphStyle
-    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+    from reportlab.lib.enums import TA_CENTER
     
     title_style = ParagraphStyle(
         'CustomTitle',
@@ -102,14 +132,15 @@ def export_to_pdf(sections: List[Dict[str, Any]], output_path: str, sop_meta: Di
             # Split content into paragraphs and handle tables
             paragraphs = content.split('\n\n')
             for para in paragraphs:
-                if para.strip():
+                para = para.strip()
+                if para:
                     # Check if it's a table
-                    if '|' in para and '---' in para:
+                    if '|' in para and ('---' in para or '━' in para):
                         # Convert Markdown table to ReportLab table
-                        lines = para.strip().split('\n')
+                        lines = para.split('\n')
                         table_data = []
                         for line in lines:
-                            if '|' in line and not line.strip().startswith('|---'):
+                            if '|' in line and not (line.strip().startswith('|---') or line.strip().startswith('|━')):
                                 cells = [cell.strip() for cell in line.split('|') if cell.strip()]
                                 if cells:
                                     table_data.append(cells)
@@ -131,9 +162,18 @@ def export_to_pdf(sections: List[Dict[str, Any]], output_path: str, sop_meta: Di
                             story.append(table)
                             story.append(Spacer(1, 12))
                     else:
-                        # Regular paragraph - split long lines at sentence boundaries
-                        sentences = para.replace('. ', '.<br/>').replace('! ', '!<br/>').replace('? ', '?<br/>')
-                        story.append(Paragraph(sentences, body_style))
+                        # Regular paragraph - handle markdown formatting
+                        # Convert basic markdown to HTML for better rendering
+                        formatted_para = para
+                        # Handle bold text **text** -> <b>text</b>
+                        import re
+                        formatted_para = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', formatted_para)
+                        # Handle italic text *text* -> <i>text</i>
+                        formatted_para = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', r'<i>\1</i>', formatted_para)
+                        # Handle line breaks
+                        formatted_para = formatted_para.replace('\n', '<br/>')
+                        
+                        story.append(Paragraph(formatted_para, body_style))
                         story.append(Spacer(1, 6))
         story.append(Spacer(1, 12))
     

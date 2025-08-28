@@ -60,8 +60,43 @@ def orchestrate_workflow(
     return ui_messages
 
 
+def _extract_clean_sop_content(raw_content: str) -> str:
+    """Extract clean SOP content, removing agent conversation artifacts."""
+    lines = raw_content.split('\n')
+    clean_lines = []
+    skip_sections = False
+    
+    for line in lines:
+        line_lower = line.lower().strip()
+        
+        # Skip agent conversation artifacts
+        if any(keyword in line_lower for keyword in [
+            'summary:', 'issues:', 'status:', 'проблемы и предложения',
+            'дополнительные рекомендации:', 'критик:', 'безопасность:',
+            'контроль качества:', 'стилизация:', 'генератор:',
+            'сгенерируй соп', 'разделы и режимы', 'требования:',
+            'учти критику', 'оцени документ', 'текст:', 'замечания качества:'
+        ]):
+            skip_sections = True
+            continue
+            
+        # Resume when we hit actual content headers
+        if line.strip().startswith('#') or (line.strip().startswith('**') and line.strip().endswith('**')):
+            skip_sections = False
+            
+        # Skip empty lines when in skip mode
+        if skip_sections and not line.strip():
+            continue
+            
+        # Add line if not skipping or if it looks like real content
+        if not skip_sections:
+            clean_lines.append(line)
+    
+    return '\n'.join(clean_lines).strip()
+
+
 def iterative_generate_until_approved(
-    coordinator: AssistantAgent,
+    coordinator: AssistantAgent,  # Kept for compatibility but not used in single-agent calls
     sop_gen: AssistantAgent,
     safety: AssistantAgent,
     critic: AssistantAgent,
@@ -72,7 +107,7 @@ def iterative_generate_until_approved(
     logger: Callable[[str], None] | None = None,
 ) -> Dict[str, Any]:
     logs: List[str] = []
-    content: str = ""
+    clean_sop_content: str = ""
     feedback: str = ""
 
     def _log(s: str) -> None:
@@ -89,32 +124,35 @@ def iterative_generate_until_approved(
                 sop_gen,
                 base_instruction_builder(feedback),
             )
-            content = "\n\n".join([m.content for m in gen_msgs if isinstance(m, TextMessage)])
-            _log(f"Генерация завершена. Длина: {len(content)} симв.")
+            raw_generated_content = "\n\n".join([m.content for m in gen_msgs if isinstance(m, TextMessage)])
+            # Extract only the clean SOP content from generator
+            clean_sop_content = _extract_clean_sop_content(raw_generated_content)
+            _log(f"Генерация завершена. Длина: {len(clean_sop_content)} симв.")
         except Exception as e:
             _log(f"Ошибка генератора: {e}")
             break
 
         _log("Проверка безопасности...")
+        safety_feedback = ""
         try:
             safety_msgs = _run_agent_and_get_messages(
                 safety,
-                f"Проверь раздел безопасности и добавь недостающее.\nТЕКСТ:\n{content}",
+                f"Проверь раздел безопасности и предложи улучшения.\nТЕКСТ:\n{clean_sop_content}",
             )
-            safety_text = "\n\n".join([m.content for m in safety_msgs if isinstance(m, TextMessage)])
-            content = content + "\n\n" + safety_text
-            _log("Безопасность обновлена.")
+            safety_feedback = "\n\n".join([m.content for m in safety_msgs if isinstance(m, TextMessage)])
+            _log("Проверка безопасности завершена.")
         except Exception as e:
             _log(f"Ошибка агента безопасности: {e}")
             break
 
         _log("Проверка качества...")
+        quality_feedback = ""
         try:
             quality_msgs = _run_agent_and_get_messages(
                 quality,
-                f"Проверь качество. Верни только список проблем и предложения.\nТЕКСТ:\n{content}",
+                f"Проверь качество. Верни только список проблем и предложения.\nТЕКСТ:\n{clean_sop_content}",
             )
-            quality_text = "\n\n".join([m.content for m in quality_msgs if isinstance(m, TextMessage)])
+            quality_feedback = "\n\n".join([m.content for m in quality_msgs if isinstance(m, TextMessage)])
         except Exception as e:
             _log(f"Ошибка контроля качества: {e}")
             break
@@ -123,7 +161,7 @@ def iterative_generate_until_approved(
         try:
             critic_msgs = _run_agent_and_get_messages(
                 critic,
-                f"Оцени документ по протоколу (SUMMARY/ISSUES/STATUS).\nТЕКСТ:\n{content}\n\nДОП. ЗАМЕЧАНИЯ КАЧЕСТВА:\n{quality_text}",
+                f"Оцени документ по протоколу (SUMMARY/ISSUES/STATUS).\nТЕКСТ:\n{clean_sop_content}\n\nЗАМЕЧАНИЯ БЕЗОПАСНОСТИ:\n{safety_feedback}\n\nЗАМЕЧАНИЯ КАЧЕСТВА:\n{quality_feedback}",
             )
             critic_texts = [m.content for m in critic_msgs if isinstance(m, TextMessage)]
             feedback = "\n\n".join(critic_texts)
@@ -138,15 +176,17 @@ def iterative_generate_until_approved(
             try:
                 styled_msgs = _run_agent_and_get_messages(
                     styler,
-                    f"Приведи текст к корпоративному стилю.\nТЕКСТ:\n{content}",
+                    f"Приведи текст к корпоративному стилю. Верни ТОЛЬКО отформатированный СОП текст без комментариев.\nТЕКСТ:\n{clean_sop_content}",
                 )
                 styled_text = "\n\n".join([m.content for m in styled_msgs if isinstance(m, TextMessage)])
-                content = styled_text or content
+                # Clean the styled text too in case it contains artifacts
+                final_content = _extract_clean_sop_content(styled_text) if styled_text else clean_sop_content
                 _log("Стилизация завершена.")
             except Exception as e:
                 _log(f"Ошибка стилизации: {e}")
-            return {"content": content, "approved": True, "feedback": feedback, "logs": logs}
+                final_content = clean_sop_content
+            return {"content": final_content, "approved": True, "feedback": feedback, "logs": logs}
 
         _log("Критик запросил правки. Повтор итерации.")
 
-    return {"content": content, "approved": False, "feedback": feedback, "logs": logs} 
+    return {"content": clean_sop_content, "approved": False, "feedback": feedback, "logs": logs} 

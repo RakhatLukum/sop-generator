@@ -269,42 +269,33 @@ def run_generation():
     )
 
     add_log("Сборка разделов...")
-    generated_full_text = loop_result.get("content", "")
+    generated_clean_content = loop_result.get("content", "")
     
-    # Clean the generated content
-    def extract_clean_content(generated_text: str) -> str:
-        """Extract clean content from generated text, removing raw instructions."""
-        lines = generated_text.split('\n')
-        clean_lines = []
-        skip_mode = False
+    # Parse sections from the clean content
+    def parse_sections_from_content(content: str, section_configs: list) -> list:
+        """Parse the generated content into sections."""
+        if not content.strip():
+            return [{"title": s["title"], "content": "Нет содержания"} for s in section_configs]
         
-        for line in lines:
-            # Skip lines that contain raw instructions
-            if any(keyword in line for keyword in [
-                "Сгенерируй СОП", "Разделы и режимы", "Требования:", 
-                "УЧТИ КРИТИКУ", "Оцени документ", "ТЕКСТ:"
-            ]):
-                skip_mode = True
-                continue
-                
-            # Stop skipping when we hit actual content markers
-            if line.strip().startswith('#') or line.strip().startswith('**'):
-                skip_mode = False
-                
-            if not skip_mode and line.strip():
-                clean_lines.append(line)
-        
-        return '\n'.join(clean_lines)
+        # For now, use the full content for each section since it's a complete SOP
+        # In the future, this could be enhanced to split by section headers
+        sections = []
+        for section_config in section_configs:
+            if section_config.get("mode") == "manual" and section_config.get("content"):
+                # Use manual content if provided
+                sections.append({
+                    "title": section_config["title"],
+                    "content": section_config["content"]
+                })
+            else:
+                # Use generated content for AI modes
+                sections.append({
+                    "title": section_config["title"],
+                    "content": content
+                })
+        return sections
     
-    clean_content = extract_clean_content(generated_full_text)
-
-    st.session_state.preview = []
-    for section in st.session_state.sections:
-        # Use clean content for all sections
-        st.session_state.preview.append({
-            "title": section["title"], 
-            "content": f"*Сгенерировано с использованием ИИ*\n\n{clean_content}"
-        })
+    st.session_state.preview = parse_sections_from_content(generated_clean_content, st.session_state.sections)
 
     add_log("Готово. Статус: " + ("Одобрено" if loop_result.get("approved") else "Нужны правки"))
 
