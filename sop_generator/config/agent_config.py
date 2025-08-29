@@ -79,20 +79,69 @@ def _needs_custom_model_info(model: str) -> bool:
     return not (lower.startswith("gpt-") or lower.startswith("o1") or lower.startswith("o3") or lower.startswith("o4"))
 
 
+# Define mock client classes at module level
+class MockOpenAIChatCompletionClient:
+    def __init__(self, **kwargs):
+        self.config = kwargs
+        self._model = kwargs.get('model', 'mock-model')
+        # Add required attributes that might be accessed
+        self.model_info = {
+            "vision": False,
+            "function_calling": False,
+            "json_output": False,
+            "structured_output": False,
+            "multiple_system_messages": True,
+            "family": "mock",
+        }
+        print(f"Warning: Using mock client for model {self._model}")
+    
+    async def create(self, messages, **kwargs):
+        # Return a mock response
+        return MockChatCompletion(
+            content="Mock response: Unable to generate content. Please check API configuration or autogen dependencies."
+        )
+
+class MockChatCompletion:
+    def __init__(self, content):
+        self.content = content
+        self.choices = [MockChoice(content)]
+
+class MockChoice:
+    def __init__(self, content):
+        self.message = MockMessage(content)
+
+class MockMessage:
+    def __init__(self, content):
+        self.content = content
+
+
 def build_openai_chat_client(cfg: Dict[str, Any]):
+    # Validate configuration first
+    api_key = cfg.get("api_key", "")
+    base_url = cfg.get("base_url", "")
+    
+    if not api_key:
+        print(f"Error: No API key provided. Using mock client. Set API_KEY environment variable for real LLM functionality.")
+        return MockOpenAIChatCompletionClient(**cfg)
+    
+    if not base_url:
+        print(f"Error: No base URL provided. Using mock client. Set OPENAI_BASE_URL environment variable for real LLM functionality.")
+        return MockOpenAIChatCompletionClient(**cfg)
+    
+    # Try to import real clients
     try:
         from autogen_ext.models.openai import OpenAIChatCompletionClient
-    except ImportError:
+    except ImportError as e:
+        print(f"Warning: autogen_ext.models.openai import failed: {e}")
         # Fallback for deployment environments where autogen_ext might not be available
         try:
             from autogen.models.openai import OpenAIChatCompletionClient
-        except ImportError:
-            # Final fallback - create a mock client
-            class MockOpenAIChatCompletionClient:
-                def __init__(self, **kwargs):
-                    self.config = kwargs
-                    print(f"Warning: Using mock client due to missing autogen dependencies")
-            OpenAIChatCompletionClient = MockOpenAIChatCompletionClient
+            print("Using fallback autogen.models.openai client")
+        except ImportError as e2:
+            print(f"Warning: autogen.models.openai import also failed: {e2}")
+            print("Using mock client due to missing dependencies")
+            return MockOpenAIChatCompletionClient(**cfg)
+    
     create_args = {
         "model": cfg.get("model"),
         "api_key": cfg.get("api_key"),
