@@ -135,6 +135,71 @@ class MockMessage:
         self.content = content
 
 
+def create_direct_openai_client(cfg: Dict[str, Any]):
+    """Create a direct OpenAI client for deployment compatibility."""
+    try:
+        from openai import AsyncOpenAI
+        
+        # Create a wrapper that mimics the expected autogen interface
+        class DirectOpenAIClientWrapper:
+            def __init__(self, config):
+                self.config = config
+                self._client = AsyncOpenAI(
+                    api_key=config["api_key"],
+                    base_url=config["base_url"]
+                )
+                self._model = config["model"]
+                self._model_info = {
+                    "vision": False,
+                    "function_calling": False,
+                    "json_output": False,
+                    "structured_output": False,
+                    "multiple_system_messages": True,
+                    "family": "openai",
+                }
+                print(f"Created direct OpenAI client for model: {self._model}")
+            
+            @property
+            def model_info(self):
+                return self._model_info
+            
+            async def create(self, messages, **kwargs):
+                try:
+                    # Clean up kwargs to match OpenAI API
+                    openai_kwargs = {
+                        "model": self._model,
+                        "messages": messages,
+                        "temperature": kwargs.get("temperature", 0.3),
+                        "max_tokens": kwargs.get("max_tokens", 1000),
+                    }
+                    
+                    response = await self._client.chat.completions.create(**openai_kwargs)
+                    
+                    # Convert to expected format
+                    class DirectResponse:
+                        def __init__(self, openai_response):
+                            self.choices = [DirectChoice(openai_response.choices[0])]
+                    
+                    class DirectChoice:
+                        def __init__(self, openai_choice):
+                            self.message = DirectMessage(openai_choice.message)
+                    
+                    class DirectMessage:
+                        def __init__(self, openai_message):
+                            self.content = openai_message.content
+                    
+                    return DirectResponse(response)
+                    
+                except Exception as e:
+                    print(f"Direct OpenAI client error: {e}")
+                    return MockChatCompletion(f"Error from LLM API: {e}")
+        
+        return DirectOpenAIClientWrapper(cfg)
+    except Exception as e:
+        print(f"Failed to create direct OpenAI client: {e}")
+        return MockOpenAIChatCompletionClient(**cfg)
+
+
 def build_openai_chat_client(cfg: Dict[str, Any]):
     # Validate configuration first
     api_key = cfg.get("api_key", "")
@@ -152,19 +217,26 @@ def build_openai_chat_client(cfg: Dict[str, Any]):
         print(f"Error: No base URL provided. Using mock client. Set OPENAI_BASE_URL environment variable for real LLM functionality.")
         return MockOpenAIChatCompletionClient(**cfg)
     
-    # Try to import real clients
+    # Try to import real clients with multiple fallbacks
     try:
+        # Try new autogen structure first
         from autogen_ext.models.openai import OpenAIChatCompletionClient
-    except ImportError as e:
-        print(f"Warning: autogen_ext.models.openai import failed: {e}")
-        # Fallback for deployment environments where autogen_ext might not be available
+        print("Using autogen_ext OpenAI client")
+    except ImportError as e1:
+        print(f"Warning: autogen_ext.models.openai import failed: {e1}")
         try:
+            # Try older autogen structure
             from autogen.models.openai import OpenAIChatCompletionClient
-            print("Using fallback autogen.models.openai client")
+            print("Using autogen.models.openai client")
         except ImportError as e2:
-            print(f"Warning: autogen.models.openai import also failed: {e2}")
-            print("Using mock client due to missing dependencies")
-            return MockOpenAIChatCompletionClient(**cfg)
+            print(f"Warning: autogen.models.openai import failed: {e2}")
+            try:
+                # Use direct OpenAI client as fallback
+                return create_direct_openai_client(cfg)
+            except ImportError as e3:
+                print(f"Warning: direct OpenAI client creation failed: {e3}")
+                print("Using mock client due to missing dependencies")
+                return MockOpenAIChatCompletionClient(**cfg)
     
     create_args = {
         "model": cfg.get("model"),

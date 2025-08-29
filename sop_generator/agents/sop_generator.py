@@ -1,8 +1,44 @@
 from typing import Dict, Any, List
-from autogen_agentchat.agents import AssistantAgent
 
 from sop_generator.config.agent_config import AGENT_DEFAULTS, build_openai_chat_client
 from sop_generator.config.prompts import SOP_GENERATOR_SYSTEM_PROMPT
+
+# Try to import AssistantAgent with fallbacks
+try:
+    from autogen_agentchat.agents import AssistantAgent
+except ImportError:
+    try:
+        from autogen.agentchat.agents import AssistantAgent
+    except ImportError:
+        try:
+            from autogen import AssistantAgent
+        except ImportError:
+            # Create a mock AssistantAgent for deployment
+            class AssistantAgent:
+                def __init__(self, name, system_message, model_client):
+                    self.name = name
+                    self.system_message = system_message
+                    self.model_client = model_client
+                    print(f"Warning: Using mock AssistantAgent for {name}")
+                
+                async def generate_reply(self, messages):
+                    try:
+                        # Convert system message to message format
+                        full_messages = [
+                            {"role": "system", "content": self.system_message}
+                        ]
+                        
+                        # Add user messages
+                        if isinstance(messages, str):
+                            full_messages.append({"role": "user", "content": messages})
+                        elif isinstance(messages, list):
+                            full_messages.extend(messages)
+                        
+                        # Get response from model client
+                        response = await self.model_client.create(full_messages)
+                        return response.choices[0].message.content
+                    except Exception as e:
+                        return f"Error generating reply: {e}"
 
 
 def build_sop_generator() -> AssistantAgent:

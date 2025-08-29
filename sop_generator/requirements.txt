@@ -1,14 +1,14 @@
+# Core dependencies
 streamlit>=1.24.0
 python-dotenv>=1.0.0
+requests>=2.25.0
+
+# Document processing  
 openpyxl>=3.1.0
 PyPDF2>=3.0.0
 python-docx>=0.8.11
 pandas>=2.0.0
 numpy>=1.24.0
-
-# Document processing
-pdf2image>=2.1.0
-pytesseract>=0.3.10
 Pillow>=9.0.0
 
 # PDF generation
@@ -17,7 +17,5 @@ reportlab>=4.0.0
 # Charts and visualization
 plotly>=5.0.0
 
-# AutoGen dependencies (correct versions)
-autogen-agentchat>=0.7.4
-autogen-core>=0.7.4
-autogen-ext>=0.7.4 
+# OpenAI compatible client
+openai>=1.0.0 
