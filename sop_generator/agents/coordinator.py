@@ -5,9 +5,9 @@ from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.messages import TextMessage, BaseChatMessage
 from autogen_agentchat.teams import RoundRobinGroupChat
 
-from config.agent_config import AGENT_DEFAULTS, build_openai_chat_client
-from config.prompts import COORDINATOR_SYSTEM_PROMPT
-from utils.section_validator import SOPSectionValidator
+from sop_generator.config.agent_config import AGENT_DEFAULTS, build_openai_chat_client
+from sop_generator.config.prompts import COORDINATOR_SYSTEM_PROMPT
+from sop_generator.utils.section_validator import SOPSectionValidator
 
 
 def build_coordinator(on_log: Callable[[str], None] | None = None) -> AssistantAgent:

@@ -1,8 +1,8 @@
 from typing import Dict, Any, List
 from autogen_agentchat.agents import AssistantAgent
 
-from config.agent_config import AGENT_DEFAULTS, build_openai_chat_client
-from config.prompts import SOP_GENERATOR_SYSTEM_PROMPT
+from sop_generator.config.agent_config import AGENT_DEFAULTS, build_openai_chat_client
+from sop_generator.config.prompts import SOP_GENERATOR_SYSTEM_PROMPT
 
 
 def build_sop_generator() -> AssistantAgent:

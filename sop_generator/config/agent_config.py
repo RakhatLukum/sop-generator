@@ -80,7 +80,19 @@ def _needs_custom_model_info(model: str) -> bool:
 
 
 def build_openai_chat_client(cfg: Dict[str, Any]):
-    from autogen_ext.models.openai import OpenAIChatCompletionClient
+    try:
+        from autogen_ext.models.openai import OpenAIChatCompletionClient
+    except ImportError:
+        # Fallback for deployment environments where autogen_ext might not be available
+        try:
+            from autogen.models.openai import OpenAIChatCompletionClient
+        except ImportError:
+            # Final fallback - create a mock client
+            class MockOpenAIChatCompletionClient:
+                def __init__(self, **kwargs):
+                    self.config = kwargs
+                    print(f"Warning: Using mock client due to missing autogen dependencies")
+            OpenAIChatCompletionClient = MockOpenAIChatCompletionClient
     create_args = {
         "model": cfg.get("model"),
         "api_key": cfg.get("api_key"),

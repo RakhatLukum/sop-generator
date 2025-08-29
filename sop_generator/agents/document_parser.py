@@ -1,9 +1,9 @@
 from typing import List, Dict, Any
 from autogen_agentchat.agents import AssistantAgent
 
-from config.agent_config import AGENT_DEFAULTS, build_openai_chat_client
-from config.prompts import DOCUMENT_PARSER_SYSTEM_PROMPT
-from utils.document_processor import parse_documents_to_chunks, create_enhanced_corpus_summary
+from sop_generator.config.agent_config import AGENT_DEFAULTS, build_openai_chat_client
+from sop_generator.config.prompts import DOCUMENT_PARSER_SYSTEM_PROMPT
+from sop_generator.utils.document_processor import parse_documents_to_chunks, create_enhanced_corpus_summary
 
 
 def build_document_parser() -> AssistantAgent:

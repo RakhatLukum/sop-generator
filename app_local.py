@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import tempfile
 from typing import List, Dict, Any
@@ -7,7 +8,10 @@ import streamlit as st
 import threading
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-from sop_generator.agents import (
+# Add the sop_generator directory to Python path for local development
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'sop_generator'))
+
+from agents import (
     build_coordinator,
     build_sop_generator,
     build_document_parser,
@@ -19,10 +23,10 @@ from sop_generator.agents import (
     orchestrate_workflow,
     summarize_parsed_chunks,
 )
-from sop_generator.agents.coordinator import iterative_generate_until_approved
-from sop_generator.utils.document_processor import parse_documents_to_chunks
-from sop_generator.utils.template_manager import load_template, apply_styles
-from sop_generator.utils.export_manager import populate_docx, export_to_docx, export_to_pdf
+from agents.coordinator import iterative_generate_until_approved
+from utils.document_processor import parse_documents_to_chunks
+from utils.template_manager import load_template, apply_styles
+from utils.export_manager import populate_docx, export_to_docx, export_to_pdf
 
 APP_TITLE = "SOP Generator (AutoGen + Streamlit)"
 
@@ -154,7 +158,7 @@ def ui_generate():
         st.progress(min(len(st.session_state.preview) / max(len(st.session_state.sections), 1), 1.0))
 
     st.subheader("Лог агентов")
-    st.text("\n".join(st.session_state.logs[-50:]))
+    st.text("\\n".join(st.session_state.logs[-50:]))
     # Auto-refresh hint for long runs
     if st.session_state.running:
         st.caption("Задача выполняется... Обновите вкладку или перейдите между вкладками для обновления логов.")
@@ -183,7 +187,7 @@ def ui_preview_and_export():
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("Экспорт в Word"):
-            doc, styles = load_template(os.path.join(os.path.dirname(__file__), "templates"))
+            doc, styles = load_template(os.path.join("sop_generator", "templates"))
             apply_styles(doc, styles)
             doc = populate_docx(doc, st.session_state.meta, st.session_state.preview)
             out_path = export_to_docx(doc, os.path.join(tempfile.gettempdir(), "sop_generated.docx"))
@@ -198,15 +202,15 @@ def ui_preview_and_export():
                 st.download_button("Скачать PDF", f, file_name="sop_generated.pdf")
     with col3:
         if st.button("Экспорт в Markdown (docs/)"):
-            docs_dir = os.path.join(os.path.dirname(__file__), "..", "docs")
+            docs_dir = os.path.join("docs")
             os.makedirs(docs_dir, exist_ok=True)
             md_path = os.path.abspath(os.path.join(docs_dir, "sop_generated.md"))
             with open(md_path, "w", encoding="utf-8") as mf:
-                mf.write(f"# {st.session_state.meta.get('title','СОП')}\n\n")
+                mf.write(f"# {st.session_state.meta.get('title','СОП')}\\n\\n")
                 if st.session_state.meta.get("number"):
-                    mf.write(f"Номер: {st.session_state.meta['number']}\n\n")
+                    mf.write(f"Номер: {st.session_state.meta['number']}\\n\\n")
                 for idx, sec in enumerate(st.session_state.preview, start=1):
-                    mf.write(f"## {idx}. {sec['title']}\n\n{sec.get('content','')}\n\n")
+                    mf.write(f"## {idx}. {sec['title']}\\n\\n{sec.get('content','')}\\n\\n")
             st.success(f"Сохранено: {md_path}")
 
 
@@ -318,4 +322,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()
