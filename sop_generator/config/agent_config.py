@@ -19,7 +19,22 @@ class LLMConfig:
     max_tokens: int = 1000  # Reduced for faster responses
     timeout: int = 30  # Reduced timeout
     base_url: str = os.getenv("OPENAI_BASE_URL", CUSTOM_LLM_BASE)
+    # Fallback to streamlit secrets if environment variable not found
     api_key: str = os.getenv("API_KEY", "")
+    
+    def __post_init__(self):
+        # Additional check for Streamlit secrets
+        if not self.api_key:
+            try:
+                import streamlit as st
+                if hasattr(st, 'secrets'):
+                    self.api_key = st.secrets.get("API_KEY", "")
+                    if not self.base_url and st.secrets.get("OPENAI_BASE_URL"):
+                        self.base_url = st.secrets["OPENAI_BASE_URL"]
+                    if not self.model and st.secrets.get("CUSTOM_LLM_MODEL"):
+                        self.model = st.secrets["CUSTOM_LLM_MODEL"]
+            except (ImportError, AttributeError):
+                pass
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -85,7 +100,7 @@ class MockOpenAIChatCompletionClient:
         self.config = kwargs
         self._model = kwargs.get('model', 'mock-model')
         # Add required attributes that might be accessed
-        self.model_info = {
+        self._model_info = {
             "vision": False,
             "function_calling": False,
             "json_output": False,
@@ -94,6 +109,11 @@ class MockOpenAIChatCompletionClient:
             "family": "mock",
         }
         print(f"Warning: Using mock client for model {self._model}")
+    
+    @property
+    def model_info(self):
+        """Model information property to match expected interface."""
+        return self._model_info
     
     async def create(self, messages, **kwargs):
         # Return a mock response
@@ -119,6 +139,10 @@ def build_openai_chat_client(cfg: Dict[str, Any]):
     # Validate configuration first
     api_key = cfg.get("api_key", "")
     base_url = cfg.get("base_url", "")
+    
+    # Debug print to see what we're getting from environment
+    print(f"Debug: API_KEY from env: {'***' if api_key else 'NOT SET'}")
+    print(f"Debug: BASE_URL from env: {base_url or 'NOT SET'}")
     
     if not api_key:
         print(f"Error: No API key provided. Using mock client. Set API_KEY environment variable for real LLM functionality.")
