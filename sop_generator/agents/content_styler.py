@@ -1,6 +1,6 @@
-from autogen_agentchat.agents import AssistantAgent
 from sop_generator.config.agent_config import AGENT_DEFAULTS, build_openai_chat_client
 from sop_generator.config.prompts import CONTENT_STYLER_SYSTEM_PROMPT
+from sop_generator.agents.base_imports import AssistantAgent
 
 
 def build_content_styler() -> AssistantAgent:

@@ -1,13 +1,11 @@
 from typing import Callable, Dict, Any, List
 import asyncio
 import os
-from autogen_agentchat.agents import AssistantAgent
-from autogen_agentchat.messages import TextMessage, BaseChatMessage
-from autogen_agentchat.teams import RoundRobinGroupChat
 
 from sop_generator.config.agent_config import AGENT_DEFAULTS, build_openai_chat_client
 from sop_generator.config.prompts import COORDINATOR_SYSTEM_PROMPT
 from sop_generator.utils.section_validator import SOPSectionValidator
+from sop_generator.agents.base_imports import AssistantAgent, TextMessage, BaseChatMessage, RoundRobinGroupChat, MockResult
 
 
 def build_coordinator(on_log: Callable[[str], None] | None = None) -> AssistantAgent:
@@ -29,17 +27,34 @@ def build_coordinator(on_log: Callable[[str], None] | None = None) -> AssistantA
 
 # Helper: run a single agent with a user task and collect messages, with timeout
 
-def _run_agent_and_get_messages(agent: AssistantAgent, task: str, timeout_s: int | None = None) -> List[BaseChatMessage]:
+def _run_agent_and_get_messages(agent: AssistantAgent, task: str, timeout_s: int | None = None) -> List[TextMessage]:
     timeout = timeout_s or int(os.getenv("LLM_TIMEOUT", "90"))
 
     async def _runner():
-        return await agent.run(task=task)
+        try:
+            # Check if agent has run method (real autogen) or use generate_reply (mock)
+            if hasattr(agent, 'run'):
+                result = await agent.run(task=task)
+                return result
+            else:
+                # For mock agents, use generate_reply
+                reply = await agent.generate_reply(task)
+                return MockResult([TextMessage(agent.name, reply)])
+        except Exception as e:
+            print(f"Agent execution error: {e}")
+            return MockResult([TextMessage(agent.name, f"Error: {e}")])
 
     try:
         result = asyncio.run(asyncio.wait_for(_runner(), timeout=timeout))
     except asyncio.TimeoutError:
         raise TimeoutError(f"LLM timed out after {timeout}s")
-    return list(getattr(result, "messages", []) or [])
+    except Exception as e:
+        print(f"Async execution error: {e}")
+        return [TextMessage(agent.name, f"Execution error: {e}")]
+    
+    # Return messages from result
+    messages = getattr(result, "messages", [])
+    return [msg for msg in messages if isinstance(msg, (TextMessage, BaseChatMessage))]
 
 
 # Note: orchestrate_workflow is kept for potential UI logs, but the main generation uses single-agent calls
