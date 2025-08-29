@@ -1,8 +1,14 @@
 from typing import Dict, List, Any, Optional
 import streamlit as st
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
+# Optional plotly imports for dashboard components
+try:
+    import plotly.graph_objects as go
+    import plotly.express as px
+    from plotly.subplots import make_subplots
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    print("Warning: Dashboard visualizations disabled due to missing plotly dependency")
 import pandas as pd
 from datetime import datetime
 

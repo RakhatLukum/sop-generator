@@ -2,12 +2,18 @@ from __future__ import annotations
 from typing import Dict, Any, List
 from docx import Document
 from docx.shared import Pt
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib import colors
+# Optional reportlab imports for PDF generation
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib import colors
+    PDF_GENERATION_AVAILABLE = True
+except ImportError:
+    PDF_GENERATION_AVAILABLE = False
+    print("Warning: PDF generation disabled due to missing reportlab dependency")
 import re
 from pathlib import Path
 
@@ -67,6 +73,9 @@ def export_to_docx(document: Document, output_path: str) -> str:
 
 
 def export_to_pdf(sections: List[Dict[str, Any]], output_path: str, sop_meta: Dict[str, Any]) -> str:
+    if not PDF_GENERATION_AVAILABLE:
+        raise ImportError("PDF generation is not available. Please install reportlab: pip install reportlab")
+    
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     

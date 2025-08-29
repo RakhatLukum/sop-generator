@@ -7,9 +7,16 @@ import io
 import pandas as pd
 from PyPDF2 import PdfReader
 from docx import Document
-from pdf2image import convert_from_path
-import pytesseract
-from PIL import Image
+
+# Optional imports for advanced PDF processing
+try:
+    from pdf2image import convert_from_path
+    from PIL import Image
+    import pytesseract
+    ADVANCED_PDF_PROCESSING = True
+except ImportError:
+    ADVANCED_PDF_PROCESSING = False
+    print("Warning: Advanced PDF processing disabled due to missing dependencies (pdf2image, PIL, pytesseract)")
 
 
 SUPPORTED_EXTS = {".pdf", ".docx", ".xlsx", ".xls"}
@@ -69,11 +76,14 @@ def _parse_pdf(path: Path, target_chunk_size: int, overlap: int) -> List[Dict[st
         for page_idx, page in enumerate(reader.pages):
             text = (page.extract_text() or "").strip()
             images_text = ""
-            if not text:
+            if not text and ADVANCED_PDF_PROCESSING:
                 # OCR whole page
-                images = convert_from_path(str(path), first_page=page_idx + 1, last_page=page_idx + 1)
-                for img in images:
-                    images_text += "\n" + pytesseract.image_to_string(img, lang="eng+rus")
+                try:
+                    images = convert_from_path(str(path), first_page=page_idx + 1, last_page=page_idx + 1)
+                    for img in images:
+                        images_text += "\n" + pytesseract.image_to_string(img, lang="eng+rus")
+                except Exception as e:
+                    images_text = f"\n[OCR_ERROR: {e}]"
             # best-effort: mark image placeholders
             if page.images:
                 images_text += "\n" + "\n".join([f"[IMAGE_PLACEHOLDER page={page_idx+1} name={getattr(im,'name','')}]" for im in page.images])

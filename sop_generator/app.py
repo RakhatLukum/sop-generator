@@ -1,28 +1,55 @@
 import os
+import sys
 import json
 import tempfile
 from typing import List, Dict, Any
+
+# Add parent directory to Python path for module resolution
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 import streamlit as st
 import threading
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-from sop_generator.agents import (
-    build_coordinator,
-    build_sop_generator,
-    build_document_parser,
-    build_content_styler,
-    build_critic,
-    build_quality_checker,
-    build_safety_agent,
-    build_generation_instruction,
-    orchestrate_workflow,
-    summarize_parsed_chunks,
-)
-from sop_generator.agents.coordinator import iterative_generate_until_approved
-from sop_generator.utils.document_processor import parse_documents_to_chunks
-from sop_generator.utils.template_manager import load_template, apply_styles
-from sop_generator.utils.export_manager import populate_docx, export_to_docx, export_to_pdf
+# Try absolute imports first, then relative imports
+try:
+    from sop_generator.agents import (
+        build_coordinator,
+        build_sop_generator,
+        build_document_parser,
+        build_content_styler,
+        build_critic,
+        build_quality_checker,
+        build_safety_agent,
+        build_generation_instruction,
+        orchestrate_workflow,
+        summarize_parsed_chunks,
+    )
+    from sop_generator.agents.coordinator import iterative_generate_until_approved
+    from sop_generator.utils.document_processor import parse_documents_to_chunks
+    from sop_generator.utils.template_manager import load_template, apply_styles
+    from sop_generator.utils.export_manager import populate_docx, export_to_docx, export_to_pdf
+except ImportError:
+    # Fallback to relative imports
+    from agents import (
+        build_coordinator,
+        build_sop_generator,
+        build_document_parser,
+        build_content_styler,
+        build_critic,
+        build_quality_checker,
+        build_safety_agent,
+        build_generation_instruction,
+        orchestrate_workflow,
+        summarize_parsed_chunks,
+    )
+    from agents.coordinator import iterative_generate_until_approved
+    from utils.document_processor import parse_documents_to_chunks
+    from utils.template_manager import load_template, apply_styles
+    from utils.export_manager import populate_docx, export_to_docx, export_to_pdf
 
 APP_TITLE = "SOP Generator (AutoGen + Streamlit)"
 
