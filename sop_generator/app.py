@@ -13,43 +13,28 @@ if parent_dir not in sys.path:
 import streamlit as st
 import threading
 from streamlit.runtime.scriptrunner import add_script_run_ctx
+from typing import List, Dict, Any
+import os
+from datetime import datetime
 
-# Try absolute imports first, then relative imports
-try:
-    from sop_generator.agents import (
-        build_coordinator,
-        build_sop_generator,
-        build_document_parser,
-        build_content_styler,
-        build_critic,
-        build_quality_checker,
-        build_safety_agent,
-        build_generation_instruction,
-        orchestrate_workflow,
-        summarize_parsed_chunks,
-    )
-    from sop_generator.agents.coordinator import iterative_generate_until_approved
-    from sop_generator.utils.document_processor import parse_documents_to_chunks
-    from sop_generator.utils.template_manager import load_template, apply_styles
-    from sop_generator.utils.export_manager import populate_docx, export_to_docx, export_to_pdf
-except ImportError:
-    # Fallback to relative imports
-    from agents import (
-        build_coordinator,
-        build_sop_generator,
-        build_document_parser,
-        build_content_styler,
-        build_critic,
-        build_quality_checker,
-        build_safety_agent,
-        build_generation_instruction,
-        orchestrate_workflow,
-        summarize_parsed_chunks,
-    )
-    from agents.coordinator import iterative_generate_until_approved
-    from utils.document_processor import parse_documents_to_chunks
-    from utils.template_manager import load_template, apply_styles
-    from utils.export_manager import populate_docx, export_to_docx, export_to_pdf
+from sop_generator.agents.coordinator import (
+    build_coordinator, 
+    iterative_generate_until_approved,
+    enhanced_iterative_generate_with_chat
+)
+from sop_generator.agents.sop_generator import build_sop_generator
+from sop_generator.agents.document_parser import build_document_parser, parse_documents_to_chunks, summarize_parsed_chunks
+from sop_generator.agents.content_styler import build_content_styler
+from sop_generator.agents.critic import build_critic
+from sop_generator.agents.quality_checker import build_quality_checker
+from sop_generator.agents.safety_agent import build_safety_agent
+from sop_generator.agents.sop_generator import build_generation_instruction
+from sop_generator.utils.export_manager import export_to_docx, export_to_pdf, populate_docx
+
+from sop_generator.ui.dashboard_components import (
+    AgentConversationViewer, 
+    render_agent_interaction_analysis
+)
 
 APP_TITLE = "SOP Generator (AutoGen + Streamlit)"
 
@@ -328,20 +313,359 @@ def run_generation():
 
 
 def main():
-    st.set_page_config(page_title=APP_TITLE, layout="wide")
-    init_session_state()
+    st.set_page_config(
+        page_title="SOP Generator",
+        page_icon="📋",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    st.title("📋 SOP Generator - AI Agent System")
+    
+    # Initialize session state
+    if "meta" not in st.session_state:
+        st.session_state.meta = {"title": "", "number": "", "equipment": ""}
+    if "sections" not in st.session_state:
+        st.session_state.sections = []
+    if "uploaded_files" not in st.session_state:
+        st.session_state.uploaded_files = []
+    if "preview" not in st.session_state:
+        st.session_state.preview = []
+    if "logs" not in st.session_state:
+        st.session_state.logs = []
+    if "running" not in st.session_state:
+        st.session_state.running = False
+    if "worker" not in st.session_state:
+        st.session_state.worker = None
+    if "parsed_chunks" not in st.session_state:
+        st.session_state.parsed_chunks = []
+    if "use_enhanced_chat" not in st.session_state:
+        st.session_state.use_enhanced_chat = True
+    if "agent_conversations" not in st.session_state:
+        st.session_state.agent_conversations = []
+    if "live_conversation_feed" not in st.session_state:
+        st.session_state.live_conversation_feed = []
 
-    st.title(APP_TITLE)
-    tabs = st.tabs(["Главная", "Разделы", "Генерация", "Предпросмотр и экспорт"]) 
+    # Sidebar configuration
+    with st.sidebar:
+        st.header("⚙️ Configuration")
+        
+        # Generation mode selection
+        st.subheader("🤖 Generation Mode")
+        use_enhanced = st.toggle(
+            "Enhanced Group Chat Mode",
+            value=st.session_state.use_enhanced_chat,
+            help="Use the new interactive group chat system with real-time agent conversations"
+        )
+        st.session_state.use_enhanced_chat = use_enhanced
+        
+        if use_enhanced:
+            st.success("🚀 Enhanced mode: Real-time agent interactions")
+        else:
+            st.info("📝 Classic mode: Sequential agent processing")
+        
+        st.markdown("---")
+        
+        # File upload
+        st.subheader("📁 Documents")
+        uploaded_files = st.file_uploader(
+            "Upload reference documents",
+            type=["pdf", "docx", "txt"],
+            accept_multiple_files=True,
+            help="Upload technical documentation, manuals, or standards"
+        )
+        
+        if uploaded_files:
+            st.session_state.uploaded_files = uploaded_files
+            st.success(f"✅ {len(uploaded_files)} file(s) uploaded")
+
+    # Main tabs
+    if st.session_state.use_enhanced_chat:
+        tabs = st.tabs([
+            "📝 Basic Setup", 
+            "🔧 Sections", 
+            "🚀 Enhanced Generation", 
+            "💬 Agent Conversations",
+            "📊 Interaction Analysis",
+            "📋 Preview & Export"
+        ])
+    else:
+        tabs = st.tabs([
+            "📝 Basic Setup", 
+            "🔧 Sections", 
+            "⚡ Generation", 
+            "📋 Preview & Export"
+        ])
 
     with tabs[0]:
         ui_home()
+
     with tabs[1]:
         ui_sections()
+
     with tabs[2]:
-        ui_generate()
-    with tabs[3]:
-        ui_preview_and_export()
+        if st.session_state.use_enhanced_chat:
+            ui_enhanced_generation()
+        else:
+            ui_generate()
+    
+    if st.session_state.use_enhanced_chat:
+        with tabs[3]:
+            ui_agent_conversations()
+        
+        with tabs[4]:
+            ui_interaction_analysis()
+        
+        with tabs[5]:
+            ui_preview_and_export()
+    else:
+        with tabs[3]:
+            ui_preview_and_export()
+
+
+def ui_enhanced_generation():
+    """Enhanced generation UI with real-time agent conversations"""
+    st.header("🚀 Enhanced AI Agent Generation")
+    
+    # Pre-generation validation
+    validation_messages = []
+    if not st.session_state.meta.get("title"):
+        validation_messages.append("❌ SOP title is required")
+    if not st.session_state.meta.get("number"):
+        validation_messages.append("❌ SOP number is required")
+    if not st.session_state.sections:
+        validation_messages.append("❌ At least one section must be configured")
+    
+    if validation_messages:
+        st.error("**Pre-generation Validation Failed:**")
+        for msg in validation_messages:
+            st.write(msg)
+        return
+    
+    # Generation controls
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        if st.button(
+            "🚀 Start Enhanced Generation", 
+            type="primary", 
+            disabled=st.session_state.running,
+            help="Start AI agent collaboration with real-time conversations"
+        ):
+            if st.session_state.worker and st.session_state.worker.is_alive():
+                add_log("Generation already in progress. Please wait...")
+            else:
+                st.session_state.running = True
+                st.session_state.agent_conversations = []  # Reset conversations
+                st.session_state.live_conversation_feed = []  # Reset live feed
+                t = threading.Thread(target=run_enhanced_generation_safe, daemon=True)
+                add_script_run_ctx(t)
+                st.session_state.worker = t
+                t.start()
+                st.rerun()
+    
+    with col2:
+        if st.button("⏹️ Stop Generation", disabled=not st.session_state.running):
+            st.session_state.running = False
+            add_log("Generation stop requested")
+    
+    with col3:
+        if st.button("🔄 Clear Logs"):
+            st.session_state.logs = []
+            st.session_state.agent_conversations = []
+            st.session_state.live_conversation_feed = []
+            st.rerun()
+    
+    # Generation progress
+    if st.session_state.running:
+        st.info("🔄 Enhanced generation in progress...")
+        progress_bar = st.progress(0)
+        
+        # Estimate progress based on logs
+        if st.session_state.logs:
+            iteration_keywords = ["ITERATION", "Starting collaborative", "Starting critic review"]
+            progress_indicators = [log for log in st.session_state.logs if any(keyword in log for keyword in iteration_keywords)]
+            progress = min(len(progress_indicators) / 6, 1.0)  # Estimate 6 major steps
+            progress_bar.progress(progress)
+    
+    # Live conversation feed
+    if st.session_state.live_conversation_feed:
+        st.markdown("---")
+        conversation_viewer = AgentConversationViewer()
+        conversation_viewer.render_live_conversation_feed(st.session_state.live_conversation_feed)
+    
+    # Generation logs
+    st.markdown("---")
+    st.subheader("📝 Generation Logs")
+    
+    if st.session_state.logs:
+        # Display recent logs in a scrollable container
+        log_container = st.container()
+        with log_container:
+            recent_logs = st.session_state.logs[-20:]  # Show last 20 logs
+            for log in recent_logs:
+                if "❌" in log or "Error" in log:
+                    st.error(log)
+                elif "✅" in log or "completed" in log:
+                    st.success(log)
+                elif "⚠️" in log or "Warning" in log:
+                    st.warning(log)
+                elif "🔄" in log or "ITERATION" in log:
+                    st.info(log)
+                else:
+                    st.text(log)
+        
+        # Auto-refresh hint
+        if st.session_state.running:
+            st.caption("🔄 Logs update automatically during generation")
+    else:
+        st.info("No logs yet. Start generation to see progress.")
+
+
+def ui_agent_conversations():
+    """UI for displaying agent conversations"""
+    st.header("💬 Agent Conversations")
+    
+    if not st.session_state.agent_conversations:
+        st.info("No agent conversations available yet. Start enhanced generation to see real-time interactions!")
+        return
+    
+    # Display conversations using the conversation viewer
+    conversation_viewer = AgentConversationViewer()
+    conversation_viewer.render_conversation_dashboard(st.session_state.agent_conversations)
+
+
+def ui_interaction_analysis():
+    """UI for agent interaction analysis"""
+    if st.session_state.agent_conversations:
+        render_agent_interaction_analysis(st.session_state.agent_conversations)
+    else:
+        st.info("No conversation data available for analysis. Complete a generation cycle first.")
+
+
+def run_enhanced_generation_safe():
+    """Safe wrapper for enhanced generation"""
+    try:
+        run_enhanced_generation()
+    except Exception as e:
+        add_log(f"❌ Generation error: {e}")
+        st.session_state.running = False
+    finally:
+        st.session_state.running = False
+
+
+def run_enhanced_generation():
+    """Enhanced generation using the new group chat system"""
+    add_log("🚀 Initializing enhanced AI agent system...")
+    
+    # Initialize agents
+    coord = build_coordinator(on_log=add_log_and_conversation)
+    sop_gen = build_sop_generator()
+    doc_parser = build_document_parser()
+    styler = build_content_styler()
+    critic = build_critic()
+    quality = build_quality_checker()
+    safety = build_safety_agent()
+
+    add_log("📚 Processing reference documents...")
+    
+    # Process global documents
+    all_docs = st.session_state.uploaded_files.copy() if st.session_state.uploaded_files else []
+    
+    # Add section-specific documents
+    for section in st.session_state.sections:
+        if section.get("mode") == "ai+doc" and section.get("documents"):
+            all_docs.extend(section["documents"])
+    
+    chunks = parse_documents_to_chunks(all_docs)
+    st.session_state.parsed_chunks = chunks
+    corpus_summary = summarize_parsed_chunks(chunks)
+    
+    add_log(f"📄 Processed {len(all_docs)} documents, extracted {len(chunks)} content chunks")
+
+    def base_instruction_builder(critique: str) -> str:
+        return build_generation_instruction(
+            sop_title=st.session_state.meta["title"],
+            sop_number=st.session_state.meta["number"],
+            equipment_type=st.session_state.meta["equipment"],
+            sections=st.session_state.sections,
+            parsed_corpus_summary=corpus_summary if corpus_summary else None,
+            critique_feedback=critique or None,
+        )
+
+    add_log("💬 Starting enhanced collaborative generation...")
+    
+    # Use the enhanced generation system
+    loop_result = enhanced_iterative_generate_with_chat(
+        coordinator=coord,
+        sop_gen=sop_gen,
+        safety=safety,
+        critic=critic,
+        quality=quality,
+        styler=styler,
+        base_instruction_builder=base_instruction_builder,
+        max_iters=3,
+        logger=add_log_and_conversation,
+    )
+
+    # Store conversation data
+    st.session_state.agent_conversations = loop_result.get("conversations", [])
+    
+    generated_full_text = loop_result.get("content", "")
+    
+    # Create preview sections
+    preview = []
+    if generated_full_text:
+        parts = generated_full_text.split("\n\n")
+        for idx, section in enumerate(st.session_state.sections):
+            if section["mode"] == "manual":
+                final_text = section.get("content", "")
+            else:
+                # Extract relevant parts for this section
+                slice_text = "\n".join(parts[idx*2:(idx+1)*2]).strip()
+                if section["mode"] == "ai+doc":
+                    top_chunks = chunks[:3]
+                    cites = "\n".join([f"Источник: {c['source']} | {c['keywords']}" for c in top_chunks])
+                    final_text = (section.get("content") or f"{slice_text}\n\n{cites}").strip()
+                else:
+                    final_text = section.get("content") or slice_text or f"[Generated] {section['title']}"
+            
+            preview.append({"title": section["title"], "content": final_text})
+    
+    st.session_state.preview = preview
+    
+    if loop_result.get("approved", False):
+        add_log("🎉 Enhanced generation completed successfully!")
+    else:
+        add_log("⚠️ Generation completed but may need manual review")
+
+
+def add_log_and_conversation(message: str):
+    """Add log message and update live conversation feed"""
+    add_log(message)
+    
+    # Extract agent conversations from log messages
+    if "🗣️" in message:
+        # Parse agent conversation format: "🗣️ AgentName: message content..."
+        try:
+            parts = message.split("🗣️ ", 1)[1].split(": ", 1)
+            if len(parts) == 2:
+                sender = parts[0].strip()
+                content = parts[1].strip()
+                
+                conversation_entry = {
+                    "sender": sender,
+                    "content": content,
+                    "timestamp": datetime.now().strftime('%H:%M:%S')
+                }
+                
+                st.session_state.live_conversation_feed.append(conversation_entry)
+                
+                # Keep only last 50 messages to prevent memory issues
+                if len(st.session_state.live_conversation_feed) > 50:
+                    st.session_state.live_conversation_feed = st.session_state.live_conversation_feed[-50:]
+        except Exception:
+            pass  # Ignore parsing errors
 
 
 if __name__ == "__main__":

@@ -28,7 +28,15 @@ def build_coordinator(on_log: Callable[[str], None] | None = None) -> AssistantA
 # Helper: run a single agent with a user task and collect messages, with timeout
 
 def _run_agent_and_get_messages(agent: AssistantAgent, task: str, timeout_s: int | None = None) -> List[TextMessage]:
-    timeout = timeout_s or int(os.getenv("LLM_TIMEOUT", "90"))
+    # Determine effective timeout: 0 or None disables timeout entirely
+    env_timeout_raw = os.getenv("LLM_TIMEOUT", "").strip()
+    env_timeout = None
+    try:
+        if env_timeout_raw:
+            env_timeout = int(env_timeout_raw)
+    except ValueError:
+        env_timeout = None
+    effective_timeout = timeout_s if timeout_s is not None else env_timeout
 
     async def _runner():
         try:
@@ -45,9 +53,13 @@ def _run_agent_and_get_messages(agent: AssistantAgent, task: str, timeout_s: int
             return MockResult([TextMessage(agent.name, f"Error: {e}")])
 
     try:
-        result = asyncio.run(asyncio.wait_for(_runner(), timeout=timeout))
+        if effective_timeout and effective_timeout > 0:
+            result = asyncio.run(asyncio.wait_for(_runner(), timeout=effective_timeout))
+        else:
+            # No timeout enforced
+            result = asyncio.run(_runner())
     except asyncio.TimeoutError:
-        raise TimeoutError(f"LLM timed out after {timeout}s")
+        raise TimeoutError(f"LLM timed out after {effective_timeout}s")
     except Exception as e:
         print(f"Async execution error: {e}")
         return [TextMessage(agent.name, f"Execution error: {e}")]

@@ -9,7 +9,7 @@ load_dotenv()
 
 # Custom LLM server configuration
 CUSTOM_LLM_BASE = "https://llm.govplan.kz/v1"
-CUSTOM_LLM_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
+CUSTOM_LLM_MODEL = "deepseek-ai/DeepSeek-V3.1"
 
 
 @dataclass
@@ -17,7 +17,7 @@ class LLMConfig:
     model: str = os.getenv("CUSTOM_LLM_MODEL", CUSTOM_LLM_MODEL)
     temperature: float = 0.3
     max_tokens: int = 1000  # Reduced for faster responses
-    timeout: int = 30  # Reduced timeout
+    timeout: int = 30  # 30 second timeout to prevent hanging
     base_url: str = os.getenv("OPENAI_BASE_URL", CUSTOM_LLM_BASE)
     # Fallback to streamlit secrets if environment variable not found
     api_key: str = os.getenv("API_KEY", "")
@@ -37,17 +37,20 @@ class LLMConfig:
                 pass
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        cfg: Dict[str, Any] = {
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "request_timeout": self.timeout,
             "base_url": self.base_url,
             "api_key": self.api_key,
             "extra_headers": {
                 "Content-Type": "application/json; charset=utf-8"
             },
         }
+        # Only include request_timeout if explicitly set to a positive value
+        if isinstance(self.timeout, int) and self.timeout > 0:
+            cfg["request_timeout"] = self.timeout
+        return cfg
 
 
 DEFAULT_LLM = LLMConfig()
@@ -226,8 +229,10 @@ def create_direct_openai_client(cfg: Dict[str, Any]):
                         "messages": messages,
                         "temperature": kwargs.get("temperature", 0.3),
                         "max_tokens": kwargs.get("max_tokens", 1000),
-                        "timeout": 30.0,  # Add timeout
                     }
+                    # Respect explicit timeout if provided via kwargs
+                    if "timeout" in kwargs and kwargs["timeout"]:
+                        openai_kwargs["timeout"] = kwargs["timeout"]
                     
                     response = await self._client.chat.completions.create(**openai_kwargs)
                     print(f"Direct OpenAI API success: received {len(response.choices)} choices")
@@ -301,10 +306,13 @@ def build_openai_chat_client(cfg: Dict[str, Any]):
         "base_url": cfg.get("base_url"),
         "temperature": cfg.get("temperature", 0.3),
         "max_tokens": cfg.get("max_tokens", 2000),
-        "request_timeout": cfg.get("request_timeout", 60),
         # Ensure messages from multiple agents remain valid for OpenAI-compatible servers
         "add_name_prefixes": True,
     }
+    # Only include request_timeout if set to a positive value
+    rt = cfg.get("request_timeout")
+    if isinstance(rt, (int, float)) and rt and rt > 0:
+        create_args["request_timeout"] = rt
     if _needs_custom_model_info(str(create_args["model"])):
         create_args["model_info"] = {
             "vision": False,

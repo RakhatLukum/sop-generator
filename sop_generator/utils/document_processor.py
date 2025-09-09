@@ -396,7 +396,6 @@ def create_enhanced_corpus_summary(chunks: List[Dict[str, Any]]) -> str:
     # Add general text chunks as context
     text_chunks = [ch.get("text", "")[:200] for ch in chunks[:5] if ch.get("text")]
     if text_chunks:
-        summary_parts.append("ДОПОЛНИТЕЛЬНЫЙ КОНТЕКСТ:")
         summary_parts.extend([f"- {chunk}..." for chunk in text_chunks])
     
     return "\n".join(summary_parts) 

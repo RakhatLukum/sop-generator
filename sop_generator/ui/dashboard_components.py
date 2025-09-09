@@ -598,6 +598,301 @@ class SOPMetricsDashboard:
                 st.plotly_chart(fig, use_container_width=True)
 
 
+class AgentConversationViewer:
+    """Component for displaying real-time agent conversations and interactions"""
+    
+    def __init__(self):
+        self.colors = {
+            "coordinator": "#2E8B57",     # Sea green
+            "sop_generator": "#4169E1",   # Royal blue  
+            "safety_agent": "#DC143C",    # Crimson
+            "critic": "#FF8C00",          # Dark orange
+            "quality_checker": "#9932CC", # Dark orchid
+            "content_styler": "#008B8B",  # Dark cyan
+            "system": "#696969"           # Dim gray
+        }
+    
+    def render_conversation_dashboard(self, conversations: List[Dict[str, Any]]):
+        """Render the main conversation dashboard"""
+        
+        st.markdown("# 💬 Agent Conversations")
+        st.markdown("---")
+        
+        if not conversations:
+            st.info("No agent conversations available yet. Start generation to see real-time interactions!")
+            return
+        
+        # Overview metrics
+        self._render_conversation_metrics(conversations)
+        
+        # Conversation tabs by iteration
+        if len(conversations) > 1:
+            iteration_tabs = st.tabs([f"Iteration {conv['iteration']}" for conv in conversations])
+            
+            for i, conv in enumerate(conversations):
+                with iteration_tabs[i]:
+                    self._render_iteration_conversation(conv)
+        else:
+            self._render_iteration_conversation(conversations[0])
+    
+    def _render_conversation_metrics(self, conversations: List[Dict[str, Any]]):
+        """Render conversation overview metrics"""
+        
+        total_messages = sum(len(conv.get('conversation', [])) for conv in conversations)
+        total_agents = set()
+        phases = set()
+        
+        for conv in conversations:
+            phases.add(conv.get('phase', 'unknown'))
+            for msg in conv.get('conversation', []):
+                total_agents.add(msg.get('sender', 'unknown'))
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Messages", total_messages)
+        
+        with col2:
+            st.metric("Active Agents", len(total_agents))
+        
+        with col3:
+            st.metric("Iterations", len(conversations))
+        
+        with col4:
+            st.metric("Phases", len(phases))
+    
+    def _render_iteration_conversation(self, conversation_data: Dict[str, Any]):
+        """Render conversation for a specific iteration"""
+        
+        iteration = conversation_data.get('iteration', 'Unknown')
+        phase = conversation_data.get('phase', 'unknown')
+        conversation = conversation_data.get('conversation', [])
+        agent_contributions = conversation_data.get('agent_contributions', {})
+        
+        st.subheader(f"🔄 Iteration {iteration} - {phase.title()} Phase")
+        
+        if not conversation:
+            st.warning("No conversation data available for this iteration")
+            return
+        
+        # Phase summary
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown(f"**Phase:** {phase.title()}")
+            st.markdown(f"**Messages:** {len(conversation)}")
+            st.markdown(f"**Participants:** {', '.join(agent_contributions.keys())}")
+        
+        with col2:
+            # Agent activity chart
+            if agent_contributions:
+                agent_msg_counts = {agent: len(msgs) for agent, msgs in agent_contributions.items()}
+                fig = px.pie(
+                    values=list(agent_msg_counts.values()),
+                    names=list(agent_msg_counts.keys()),
+                    title="Message Distribution"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # Conversation timeline
+        st.markdown("### 📝 Conversation Timeline")
+        
+        # Create expandable conversation view
+        with st.expander("View Full Conversation", expanded=True):
+            self._render_conversation_timeline(conversation)
+        
+        # Agent contributions detail
+        if agent_contributions:
+            st.markdown("### 👥 Agent Contributions")
+            
+            agent_tabs = st.tabs(list(agent_contributions.keys()))
+            
+            for i, (agent, contributions) in enumerate(agent_contributions.items()):
+                with agent_tabs[i]:
+                    st.markdown(f"**{agent}** contributed {len(contributions)} message(s):")
+                    
+                    for j, contribution in enumerate(contributions):
+                        with st.container():
+                            st.markdown(f"**Message {j+1}:**")
+                            st.text_area(
+                                f"Content {j+1}", 
+                                contribution, 
+                                height=150, 
+                                disabled=True,
+                                key=f"contrib_{iteration}_{phase}_{agent}_{j}"
+                            )
+    
+    def _render_conversation_timeline(self, conversation: List[Dict[str, str]]):
+        """Render the conversation timeline with messages"""
+        
+        for i, message in enumerate(conversation):
+            sender = message.get('sender', 'Unknown')
+            content = message.get('content', '')
+            
+            # Get agent color
+            agent_key = sender.lower().replace(' ', '_')
+            color = self.colors.get(agent_key, self.colors['system'])
+            
+            # Create message bubble
+            with st.container():
+                col1, col2 = st.columns([1, 4])
+                
+                with col1:
+                    st.markdown(
+                        f'<div style="background-color: {color}; color: white; '
+                        f'padding: 5px 10px; border-radius: 15px; text-align: center; '
+                        f'margin: 5px 0; font-size: 12px; font-weight: bold;">'
+                        f'{sender}</div>',
+                        unsafe_allow_html=True
+                    )
+                
+                with col2:
+                    # Message content with styling
+                    st.markdown(
+                        f'<div style="background-color: #f0f2f6; padding: 10px 15px; '
+                        f'border-radius: 10px; margin: 5px 0; border-left: 4px solid {color};">'
+                        f'{content}</div>',
+                        unsafe_allow_html=True
+                    )
+                
+                # Add separator between messages
+                if i < len(conversation) - 1:
+                    st.markdown("<hr style='margin: 10px 0; border: none; height: 1px; background-color: #e0e0e0;'>", unsafe_allow_html=True)
+    
+    def render_live_conversation_feed(self, conversation_history: List[Dict[str, str]]):
+        """Render a live conversation feed that updates in real-time"""
+        
+        st.markdown("### 🔴 Live Agent Conversation")
+        
+        if not conversation_history:
+            st.info("Waiting for agent conversations to begin...")
+            return
+        
+        # Display last 10 messages
+        recent_messages = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
+        
+        # Create a scrollable container
+        with st.container():
+            for message in recent_messages:
+                sender = message.get('sender', 'Unknown')
+                content = message.get('content', '')
+                timestamp = message.get('timestamp', datetime.now().strftime('%H:%M:%S'))
+                
+                # Get agent color
+                agent_key = sender.lower().replace(' ', '_')
+                color = self.colors.get(agent_key, self.colors['system'])
+                
+                # Live message format
+                st.markdown(
+                    f'<div style="display: flex; align-items: center; margin: 5px 0;">'
+                    f'<span style="background-color: {color}; color: white; '
+                    f'padding: 2px 8px; border-radius: 10px; font-size: 11px; '
+                    f'font-weight: bold; margin-right: 10px;">{sender}</span>'
+                    f'<span style="color: #666; font-size: 11px; margin-right: 10px;">{timestamp}</span>'
+                    f'<span style="flex: 1;">{content[:100]}{"..." if len(content) > 100 else ""}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+        
+        # Auto-refresh hint
+        st.markdown(
+            '<div style="text-align: center; color: #666; font-size: 12px; margin-top: 10px;">'
+            '🔄 Live feed - refresh page to see latest messages</div>',
+            unsafe_allow_html=True
+        )
+
+
+def render_agent_interaction_analysis(conversations: List[Dict[str, Any]]):
+    """Analyze and visualize agent interaction patterns"""
+    
+    st.markdown("# 🔍 Agent Interaction Analysis")
+    st.markdown("---")
+    
+    if not conversations:
+        st.info("No conversation data available for analysis")
+        return
+    
+    # Extract all messages for analysis
+    all_messages = []
+    for conv in conversations:
+        for msg in conv.get('conversation', []):
+            all_messages.append({
+                'iteration': conv.get('iteration', 0),
+                'phase': conv.get('phase', 'unknown'),
+                'sender': msg.get('sender', 'unknown'),
+                'content': msg.get('content', ''),
+                'content_length': len(msg.get('content', ''))
+            })
+    
+    if not all_messages:
+        st.warning("No messages found in conversation data")
+        return
+    
+    df = pd.DataFrame(all_messages)
+    
+    # Agent activity analysis
+    st.subheader("📊 Agent Activity Analysis")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Messages per agent
+        agent_counts = df['sender'].value_counts()
+        fig = px.bar(
+            x=agent_counts.values,
+            y=agent_counts.index,
+            orientation='h',
+            title="Messages per Agent",
+            labels={'x': 'Message Count', 'y': 'Agent'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        # Average message length per agent
+        avg_lengths = df.groupby('sender')['content_length'].mean().sort_values(ascending=False)
+        fig = px.bar(
+            x=avg_lengths.index,
+            y=avg_lengths.values,
+            title="Average Message Length by Agent",
+            labels={'x': 'Agent', 'y': 'Average Characters'}
+        )
+        fig.update_xaxis(tickangle=45)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Phase analysis
+    st.subheader("🔄 Phase Analysis")
+    
+    phase_analysis = df.groupby(['phase', 'sender']).size().unstack(fill_value=0)
+    
+    if not phase_analysis.empty:
+        fig = px.bar(
+            phase_analysis,
+            title="Agent Activity by Phase",
+            labels={'value': 'Message Count', 'index': 'Phase'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Interaction timeline
+    st.subheader("⏱️ Interaction Timeline")
+    
+    # Create a simple timeline view
+    timeline_data = df.groupby(['iteration', 'phase', 'sender']).size().reset_index(name='message_count')
+    
+    if not timeline_data.empty:
+        fig = px.scatter(
+            timeline_data,
+            x='iteration',
+            y='sender',
+            size='message_count',
+            color='phase',
+            title="Agent Interaction Timeline",
+            labels={'iteration': 'Iteration', 'sender': 'Agent'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+
 def render_comparison_dashboard(sop_versions: List[Dict[str, Any]]):
     """Render comparison dashboard for multiple SOP versions"""
     
