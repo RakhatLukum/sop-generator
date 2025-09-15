@@ -23,7 +23,7 @@ def build_generation_instruction(
     parsed_corpus_summary: str | None,
     critique_feedback: str | None = None,
 ) -> str:
-    from utils.section_validator import create_mandatory_sections_template
+    from sop_generator.utils.section_validator import create_mandatory_sections_template
     
     # Ensure mandatory sections are included
     mandatory_sections = create_mandatory_sections_template()

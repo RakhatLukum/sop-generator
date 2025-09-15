@@ -7,34 +7,27 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-# Custom LLM server configuration
-CUSTOM_LLM_BASE = "https://llm.govplan.kz/v1"
-CUSTOM_LLM_MODEL = "deepseek-ai/DeepSeek-V3.1"
+# Custom LLM server configuration (no-auth)
+CUSTOM_LLM_BASE = "https://lzl4i1wx0cdh9a-8000.proxy.runpod.net/v1"
+CUSTOM_LLM_MODEL = "llama4scout"
+RUNPOD_HOST_SNIPPET = "lzl4i1wx0cdh9a-8000.proxy.runpod.net"
 
 
 @dataclass
 class LLMConfig:
-    model: str = os.getenv("CUSTOM_LLM_MODEL", CUSTOM_LLM_MODEL)
+    # Force defaults to custom no-auth server
+    model: str = CUSTOM_LLM_MODEL
     temperature: float = 0.3
     max_tokens: int = 1000  # Reduced for faster responses
     timeout: int = 30  # 30 second timeout to prevent hanging
-    base_url: str = os.getenv("OPENAI_BASE_URL", CUSTOM_LLM_BASE)
-    # Fallback to streamlit secrets if environment variable not found
-    api_key: str = os.getenv("API_KEY", "")
+    base_url: str = CUSTOM_LLM_BASE
+    # Do not auto-read API keys by default to avoid switching to auth clients
+    api_key: str = ""
     
     def __post_init__(self):
-        # Additional check for Streamlit secrets
-        if not self.api_key:
-            try:
-                import streamlit as st
-                if hasattr(st, 'secrets'):
-                    self.api_key = st.secrets.get("API_KEY", "")
-                    if not self.base_url and st.secrets.get("OPENAI_BASE_URL"):
-                        self.base_url = st.secrets["OPENAI_BASE_URL"]
-                    if not self.model and st.secrets.get("CUSTOM_LLM_MODEL"):
-                        self.model = st.secrets["CUSTOM_LLM_MODEL"]
-            except (ImportError, AttributeError):
-                pass
+        # Intentionally do not override model/base_url/api_key from env or secrets
+        # to ensure "streamlit run ..." uses the custom no-auth server reliably.
+        pass
 
     def to_dict(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {
@@ -201,7 +194,7 @@ def create_direct_openai_client(cfg: Dict[str, Any]):
             def __init__(self, config):
                 self.config = config
                 self._client = AsyncOpenAI(
-                    api_key=config["api_key"],
+                    api_key=config.get("api_key") or "EMPTY",
                     base_url=config["base_url"]
                 )
                 self._model = config["model"]
@@ -262,22 +255,159 @@ def create_direct_openai_client(cfg: Dict[str, Any]):
         return MockOpenAIChatCompletionClient(**cfg)
 
 
+def create_noauth_openai_client(cfg: Dict[str, Any]):
+    """Create a no-auth OpenAI-compatible client using plain HTTP requests."""
+    import json as _json
+    import requests
+    import asyncio
+
+    def _extract_text_from_content(content) -> str:
+        # Content may be a string or a list of dicts (e.g., [{type: 'text', text: '...'}])
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                try:
+                    if isinstance(item, dict):
+                        if item.get("type") == "text" and isinstance(item.get("text"), str):
+                            parts.append(item.get("text") or "")
+                        elif "content" in item and isinstance(item["content"], str):
+                            parts.append(item["content"])  # generic fallback
+                    else:
+                        txt = getattr(item, "text", None) or getattr(item, "content", None)
+                        if isinstance(txt, str):
+                            parts.append(txt)
+                except Exception:
+                    continue
+            return "\n".join([p for p in parts if p])
+        # Generic fallback
+        return str(content)
+
+    def _normalize_messages(messages_input) -> list[dict]:
+        normalized: list[dict] = []
+        if isinstance(messages_input, list):
+            for m in messages_input:
+                # Already a dict with role/content
+                if isinstance(m, dict):
+                    role = m.get("role") or "user"
+                    content = _extract_text_from_content(m.get("content", ""))
+                    normalized.append({"role": role, "content": content})
+                    continue
+                # Object message from autogen; infer role from attribute or class name
+                try:
+                    role = getattr(m, "role", None)
+                    if not role:
+                        cls = m.__class__.__name__.lower()
+                        if "system" in cls:
+                            role = "system"
+                        elif "assistant" in cls:
+                            role = "assistant"
+                        else:
+                            role = "user"
+                    content = _extract_text_from_content(getattr(m, "content", ""))
+                    normalized.append({"role": role, "content": content})
+                except Exception:
+                    # Last-resort best-effort
+                    normalized.append({"role": "user", "content": str(m)})
+        else:
+            # Single string prompt
+            normalized.append({"role": "user", "content": _extract_text_from_content(messages_input)})
+        return normalized
+
+    class NoAuthClientWrapper:
+        def __init__(self, config: Dict[str, Any]):
+            self.config = config
+            self._base_url = (config.get("base_url") or CUSTOM_LLM_BASE).rstrip("/")
+            # Ensure we point to the chat completions endpoint
+            if "/v1" in self._base_url:
+                self._endpoint = f"{self._base_url}/chat/completions"
+            else:
+                self._endpoint = f"{self._base_url}/v1/chat/completions"
+            self._model = config.get("model") or CUSTOM_LLM_MODEL
+            self._model_info = {
+                "vision": False,
+                "function_calling": False,
+                "json_output": False,
+                "structured_output": False,
+                "multiple_system_messages": True,
+                "family": "openai-compatible",
+            }
+            print(f"Using no-auth HTTP client for model: {self._model} @ {self._endpoint}")
+
+        @property
+        def model_info(self):
+            return self._model_info
+
+        def _post(self, payload: Dict[str, Any]) -> Any:
+            headers = {"Content-Type": "application/json"}
+            timeout = self.config.get("request_timeout") or 30
+            resp = requests.post(self._endpoint, headers=headers, data=_json.dumps(payload), timeout=timeout)
+            resp.raise_for_status()
+            return resp.json()
+
+        async def create(self, messages, **kwargs):
+            try:
+                normalized_messages = _normalize_messages(messages)
+                payload = {
+                    "model": self._model,
+                    "messages": normalized_messages,
+                    "temperature": kwargs.get("temperature", self.config.get("temperature", 0.3)),
+                    "max_tokens": kwargs.get("max_tokens", self.config.get("max_tokens", 1000)),
+                    "stream": False,
+                }
+                data = await asyncio.to_thread(self._post, payload)
+
+                # Normalize to expected interface
+                class DirectResponse:
+                    def __init__(self, data: Dict[str, Any]):
+                        class DirectMessage:
+                            def __init__(self, content: str):
+                                self.content = content
+                        class DirectChoice:
+                            def __init__(self, message_content: str):
+                                self.message = DirectMessage(message_content)
+                        # Extract content robustly
+                        content = ""
+                        try:
+                            # OpenAI chat shape
+                            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        except Exception:
+                            content = ""
+                        if not content:
+                            # vLLM older shapes or fallback
+                            try:
+                                content = data.get("choices", [{}])[0].get("text", "")
+                            except Exception:
+                                content = ""
+                        if not content:
+                            # Last resort: dump a short debug summary to avoid empty result
+                            content = f"[LLM response missing content] keys={list(data.keys())}"
+                        self.choices = [DirectChoice(content)]
+                return DirectResponse(data)
+            except Exception as e:
+                print(f"No-auth client error: {e}")
+                return MockChatCompletion(f"Error from LLM API: {e}")
+
+    return NoAuthClientWrapper(cfg)
+
+
 def build_openai_chat_client(cfg: Dict[str, Any]):
     # Validate configuration first
     api_key = cfg.get("api_key", "")
-    base_url = cfg.get("base_url", "")
+    base_url = cfg.get("base_url", "") or CUSTOM_LLM_BASE
     
-    # Debug print to see what we're getting from environment
-    print(f"Debug: API_KEY from env: {'***' if api_key else 'NOT SET'}")
-    print(f"Debug: BASE_URL from env: {base_url or 'NOT SET'}")
+    # Debug print to see what we're getting from configuration
+    print(f"Debug: API_KEY present: {'YES' if bool(api_key) else 'NO'}")
+    print(f"Debug: BASE_URL: {base_url}")
     
-    if not api_key:
-        print(f"Error: No API key provided. Using mock client. Set API_KEY environment variable for real LLM functionality.")
-        return MockOpenAIChatCompletionClient(**cfg)
+    # Always use no-auth client for our custom runpod endpoint
+    if RUNPOD_HOST_SNIPPET in base_url:
+        return create_noauth_openai_client({**cfg, "base_url": base_url, "api_key": ""})
     
-    if not base_url:
-        print(f"Error: No base URL provided. Using mock client. Set OPENAI_BASE_URL environment variable for real LLM functionality.")
-        return MockOpenAIChatCompletionClient(**cfg)
+    # If no API key is provided, but base_url is set, use a no-auth client
+    if not api_key and base_url:
+        return create_noauth_openai_client({**cfg, "base_url": base_url})
     
     # Try to import real clients with multiple fallbacks
     try:
@@ -294,7 +424,7 @@ def build_openai_chat_client(cfg: Dict[str, Any]):
             print(f"Warning: autogen.models.openai import failed: {e2}")
             try:
                 # Use direct OpenAI client as fallback
-                return create_direct_openai_client(cfg)
+                return create_direct_openai_client({**cfg, "base_url": base_url, "api_key": api_key or "EMPTY"})
             except ImportError as e3:
                 print(f"Warning: direct OpenAI client creation failed: {e3}")
                 print("Using mock client due to missing dependencies")
@@ -302,8 +432,8 @@ def build_openai_chat_client(cfg: Dict[str, Any]):
     
     create_args = {
         "model": cfg.get("model"),
-        "api_key": cfg.get("api_key"),
-        "base_url": cfg.get("base_url"),
+        "api_key": api_key or "EMPTY",
+        "base_url": base_url,
         "temperature": cfg.get("temperature", 0.3),
         "max_tokens": cfg.get("max_tokens", 2000),
         # Ensure messages from multiple agents remain valid for OpenAI-compatible servers

@@ -1077,6 +1077,9 @@ def run_professional_generation():
     
     # Initialize agents
     add_log("🤖 Building agent ensemble...")
+    # NOTE: Professional app currently references additional agents (parser, styler, safety, quality).
+    # The simplified two-agent flow changes in this commit do not modify this professional module.
+    # Consider refactoring this file similarly if you intend to use it.
     coord = build_coordinator(on_log=add_log)
     sop_gen = build_sop_generator()
     doc_parser = build_document_parser()

@@ -4,18 +4,13 @@ import tempfile
 from typing import List, Dict, Any
 
 from agents import (
-    build_coordinator,
     build_sop_generator,
-    build_document_parser,
-    build_content_styler,
     build_critic,
-    build_quality_checker,
-    build_safety_agent,
     build_generation_instruction,
     summarize_parsed_chunks,
 )
 from agents.coordinator import iterative_generate_until_approved
-from utils.document_processor import parse_documents_to_chunks
+from sop_generator.utils.document_processor import parse_documents_to_chunks
 
 
 def _parse_section_arg(raw: str) -> Dict[str, Any]:
@@ -28,13 +23,8 @@ def _parse_section_arg(raw: str) -> Dict[str, Any]:
 
 
 def run_agents(title: str, number: str, equipment: str, docs: List[str], sections: List[Dict[str, Any]]) -> Dict[str, Any]:
-    coord = build_coordinator(on_log=lambda m: None)
     sop_gen = build_sop_generator()
-    doc_parser = build_document_parser()
-    styler = build_content_styler()
     critic = build_critic()
-    quality = build_quality_checker()
-    safety = build_safety_agent()
 
     chunks = parse_documents_to_chunks(docs)
     corpus_summary = summarize_parsed_chunks(chunks)
@@ -50,12 +40,8 @@ def run_agents(title: str, number: str, equipment: str, docs: List[str], section
         )
 
     loop_result = iterative_generate_until_approved(
-        coordinator=coord,
         sop_gen=sop_gen,
-        safety=safety,
         critic=critic,
-        quality=quality,
-        styler=styler,
         base_instruction_builder=base_instruction_builder,
         max_iters=5,
         logger=lambda m: None,
@@ -82,7 +68,7 @@ def run_agents(title: str, number: str, equipment: str, docs: List[str], section
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Run SOP generation agents (no UI)")
+    ap = argparse.ArgumentParser(description="Run SOP generation (Generator + Critic, no UI)")
     ap.add_argument("--title", required=True)
     ap.add_argument("--number", required=True)
     ap.add_argument("--equipment", default="")
