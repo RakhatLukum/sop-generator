@@ -12,15 +12,9 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'sop_generator'))
 
 from agents import (
-    build_coordinator,
     build_sop_generator,
-    build_document_parser,
-    build_content_styler,
     build_critic,
-    build_quality_checker,
-    build_safety_agent,
     build_generation_instruction,
-    orchestrate_workflow,
     summarize_parsed_chunks,
 )
 from agents.coordinator import iterative_generate_until_approved
@@ -363,13 +357,8 @@ def run_generation():
         run_mock_generation()
         return
     
-    coord = build_coordinator(on_log=add_log)
     sop_gen = build_sop_generator()
-    doc_parser = build_document_parser()
-    styler = build_content_styler()
     critic = build_critic()
-    quality = build_quality_checker()
-    safety = build_safety_agent()
 
     add_log("Обработка документов...")
     
@@ -399,12 +388,8 @@ def run_generation():
 
     add_log("Итеративная генерация до одобрения критиком...")
     loop_result = iterative_generate_until_approved(
-        coordinator=coord,
         sop_gen=sop_gen,
-        safety=safety,
         critic=critic,
-        quality=quality,
-        styler=styler,
         base_instruction_builder=base_instruction_builder,
         max_iters=4,  # Increased for better refinement
         logger=add_log,
@@ -656,21 +641,14 @@ def run_conversation_preview() -> None:
         st.session_state.conversation = [
             {"sender": "Coordinator", "content": "Коллеги, сформируйте черновик СОП по введенным метаданным и разделам."},
             {"sender": "SOP_Generator", "content": "Готов черновой вариант. Структура соблюдена, параметры заполнены."},
-            {"sender": "Safety_Agent", "content": "Добавил предупреждения ВНИМАНИЕ/ПРЕДУПРЕЖДЕНИЕ и требования к СИЗ."},
-            {"sender": "Quality_Checker", "content": "Найдены несоответствия: уточнить допуски RSD и частоту QC-проб."},
             {"sender": "Critic", "content": "SUMMARY: Хорошо структурировано.\nISSUES: Уточнить критерии приемки.\nSTATUS: REVISE"},
-            {"sender": "Styler", "content": "Привел стиль к корпоративному, единая терминология и форматирование."},
         ]
         add_log("Диалог (мок) сформирован без обращения к LLM.")
         return
 
     # Initialize agents
-    coord = build_coordinator(on_log=add_log)
     sop_gen = build_sop_generator()
-    safety = build_safety_agent()
     critic = build_critic()
-    quality = build_quality_checker()
-    styler = build_content_styler()
 
     # Aggregate docs: global + ai+doc per-section
     all_docs = st.session_state.uploaded_files.copy() if st.session_state.uploaded_files else []
@@ -691,46 +669,25 @@ def run_conversation_preview() -> None:
             critique_feedback=critique or None,
         )
 
-    # Try real group chat first
-    try:
-        instructions = base_instruction_builder("")
-        messages = orchestrate_workflow(
-            coordinator=coord,
-            agents=[sop_gen, safety, critic, quality, styler],
-            instructions=instructions,
-            max_rounds=6,
-        )
-        st.session_state.conversation = messages
-        add_log(f"Диалог завершен. Сообщений: {len(messages)}")
-        return
-    except Exception as e:
-        add_log(f"Групповой чат недоступен, используем последовательный режим: {e}")
-
-    # Sequential fallback transcript (short)
+    # Sequential transcript with two agents
     transcript: list[dict] = []
+
+    def _collect(sender: str, content: str) -> None:
+        if content:
+            transcript.append({"sender": sender, "content": content})
+
     # 1) Generator produces initial draft
     gen_msgs = _run_agent_and_get_messages_local(sop_gen, base_instruction_builder(""))
-    transcript.extend(gen_msgs)
-    draft_text = "\n\n".join([m["content"] for m in gen_msgs])
+    _collect("SOP_Generator", "\n\n".join([m.content for m in gen_msgs]))
 
-    # 2) Safety review
-    safety_msgs = _run_agent_and_get_messages_local(safety, f"Проверь раздел безопасности.\nТЕКСТ:\n{draft_text[:3000]}")
-    transcript.extend(safety_msgs)
-
-    # 3) Quality review
-    quality_msgs = _run_agent_and_get_messages_local(quality, f"Выяви проблемы качества. Верни только список.\nТЕКСТ:\n{draft_text[:3000]}")
-    transcript.extend(quality_msgs)
-
-    # 4) Critic summary
-    critic_msgs = _run_agent_and_get_messages_local(critic, f"Оцени документ. Верни SUMMARY/ISSUES/STATUS.\nТЕКСТ:\n{draft_text[:3000]}")
-    transcript.extend(critic_msgs)
-
-    # 5) Styler pass
-    styler_msgs = _run_agent_and_get_messages_local(styler, f"Приведи к единому стилю. Верни ТОЛЬКО текст.\nТЕКСТ:\n{draft_text[:3000]}")
-    transcript.extend(styler_msgs)
+    # 2) Critic reviews and provides feedback
+    critic_msgs = _run_agent_and_get_messages_local(critic, f"Оцени документ по протоколу (SUMMARY/ISSUES/STATUS).\nТЕКСТ:\n{transcript[-1]['content']}")
+    critic_text = "\n\n".join([m.content for m in critic_msgs])
+    _collect("Critic", critic_text)
 
     st.session_state.conversation = transcript
-    add_log(f"Последовательный диалог завершен. Сообщений: {len(transcript)}")
+    add_log(f"Диалог завершен. Сообщений: {len(transcript)}")
+    return
 
 
 def run_conversation_preview_safe() -> None:
