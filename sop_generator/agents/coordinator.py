@@ -8,6 +8,7 @@ from sop_generator.agents.base_imports import AssistantAgent, TextMessage, BaseC
 
 # Helper: run a single agent with a user task and collect messages, with timeout
 
+
 def _run_agent_and_get_messages(agent: AssistantAgent, task: str, timeout_s: int | None = None) -> List[TextMessage]:
     # Determine effective timeout: 0 or None disables timeout entirely
     env_timeout_raw = os.getenv("LLM_TIMEOUT", "").strip()
@@ -151,6 +152,124 @@ def _extract_clean_sop_content(raw_content: str) -> str:
     return '\n'.join(result_lines).strip()
 
 
+# Apply a strict outline with numbered H2 headers for mandatory sections
+MANDATORY_SECTION_TITLES: list[str] = [
+    "Цель и область применения",
+    "Ответственность и обучение",
+    "Анализ рисков и безопасность",
+    "Оборудование и материалы",
+    "Пошаговые процедуры",
+    "Контроль качества",
+    "Документооборот и записи",
+    "Нормативные ссылки",
+    "Устранение неисправностей",
+]
+
+# Common synonyms to help map headings to official titles
+_SECTION_SYNONYMS: dict[str, list[str]] = {
+    "Цель и область применения": ["цель", "назначение", "область применения", "scope"],
+    "Ответственность и обучение": ["ответствен", "обучен", "квалификац", "роли", "персонал"],
+    "Анализ рисков и безопасность": ["риск", "опасн", "безопасн", "сиз", "предупрежд"],
+    "Оборудование и материалы": ["оборудован", "материал", "спецификац", "модель", "комплектация"],
+    "Пошаговые процедуры": ["процедур", "шаг", "порядок", "инструкция", "выполнен"],
+    "Контроль качества": ["качест", "контроль", "приемк", "валидац", "критер"],
+    "Документооборот и записи": ["документ", "запис", "учет", "журнал", "архив"],
+    "Нормативные ссылки": ["ссылк", "норматив", "стандарт", "gost", "iso"],
+    "Устранение неисправностей": ["неисправ", "проблем", "диагност", "troubleshoot"],
+}
+
+
+def _enforce_strict_outline(clean_content: str) -> str:
+    """Re-map headings to the official order and enforce '## N. Title' formatting.
+    Keeps the original body text of each section (first occurrence), drops duplicates,
+    and ignores non-matching headers. Unknown content remains in place after the main sections.
+    """
+    lines = clean_content.split('\n')
+
+    def _is_header(s: str) -> bool:
+        s = s.strip()
+        if not s:
+            return False
+        if s.startswith('#'):
+            return True
+        # Bold-only line as header
+        if s.startswith('**') and s.endswith('**') and len(s) > 4:
+            return True
+        # A plain numbered header like "1. ..." on its own line
+        if re.match(r"^\d+\.\s+[^\-].{0,120}$", s):
+            return True
+        return False
+
+    def _map_to_official(title_text: str) -> str | None:
+        norm = title_text.strip().strip('*# ').rstrip(':').lower()
+        # Try direct match
+        for official in MANDATORY_SECTION_TITLES:
+            if norm == official.lower():
+                return official
+        # Try contains/synonyms
+        for official, keys in _SECTION_SYNONYMS.items():
+            if any(k in norm for k in keys):
+                return official
+        return None
+
+    # Collect content by official title
+    collected: dict[str, list[str]] = {t: [] for t in MANDATORY_SECTION_TITLES}
+    used: set[str] = set()
+
+    current_official: str | None = None
+    buffer: list[str] = []
+
+    def _flush():
+        nonlocal current_official, buffer
+        if current_official is not None and buffer:
+            if current_official not in used:
+                collected[current_official] = buffer.copy()
+                used.add(current_official)
+        buffer = []
+
+    for line in lines:
+        if _is_header(line):
+            # Before switching, flush
+            _flush()
+            # Determine mapped official
+            # Extract raw header text without leading hashes and numbering
+            raw = re.sub(r"^#+\s*", "", line.strip())
+            raw = re.sub(r"^\d+\.\s*", "", raw)
+            raw = raw.strip().strip('*').strip()
+            mapped = _map_to_official(raw)
+            current_official = mapped
+            continue
+        # Accumulate
+        if current_official is not None:
+            buffer.append(line)
+
+    # Flush last buffer
+    _flush()
+
+    # Build the final document in strict order
+    out_lines: list[str] = []
+    for idx, official in enumerate(MANDATORY_SECTION_TITLES, start=1):
+        section_body_lines = [l for l in collected.get(official, [])]
+        if not section_body_lines:
+            # If no content captured, skip empty section to avoid placeholders
+            continue
+        out_lines.append(f"## {idx}. {official}")
+        # Trim leading/trailing blanks within section
+        # and collapse excessive blank lines inside the section body
+        prev_blank = True
+        for l in section_body_lines:
+            is_blank = not l.strip()
+            if is_blank and prev_blank:
+                continue
+            out_lines.append(l)
+            prev_blank = is_blank
+        out_lines.append("")
+
+    # Return formatted document (without leading/trailing newlines)
+    return "\n".join([l.rstrip() for l in out_lines]).strip()
+
+
+
 def iterative_generate_until_approved(
     sop_gen: AssistantAgent,
     critic: AssistantAgent,
@@ -179,6 +298,8 @@ def iterative_generate_until_approved(
             raw_generated_content = "\n\n".join([m.content for m in gen_msgs if isinstance(m, TextMessage)])
             # Extract only the clean SOP content from generator
             clean_sop_content = _extract_clean_sop_content(raw_generated_content)
+            # Enforce strict outline formatting (## N. Title)
+            clean_sop_content = _enforce_strict_outline(clean_sop_content)
             _log(f"Генерация завершена. Длина: {len(clean_sop_content)} симв.")
         except Exception as e:
             _log(f"Ошибка генератора: {e}")

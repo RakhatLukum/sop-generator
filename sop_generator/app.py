@@ -16,6 +16,7 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 from typing import List, Dict, Any
 import os
 from datetime import datetime
+import shutil
 
 from sop_generator.agents.coordinator import (
     iterative_generate_until_approved,
@@ -197,6 +198,13 @@ def ui_preview_and_export():
             apply_styles(doc, styles)
             doc = populate_docx(doc, st.session_state.meta, st.session_state.preview)
             out_path = export_to_docx(doc, os.path.join(tempfile.gettempdir(), "sop_generated.docx"))
+            # Also save to project root for convenience
+            try:
+                project_root_copy = os.path.abspath(os.path.join(current_dir, "..", "sop_generated.docx"))
+                shutil.copyfile(out_path, project_root_copy)
+                st.info(f"Скопировано в: {project_root_copy}")
+            except Exception:
+                pass
             st.success(f"Сохранено: {out_path}")
             with open(out_path, "rb") as f:
                 st.download_button("Скачать DOCX", f, file_name="sop_generated.docx")

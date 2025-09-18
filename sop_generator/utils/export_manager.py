@@ -18,50 +18,137 @@ import re
 from pathlib import Path
 
 
+def _is_md_table_separator(line: str) -> bool:
+    s = line.strip()
+    return s.startswith('|') and set(s.replace('|', '').strip()) <= set('-:—━')
+
+
+def _clean_md_inline(text: str) -> str:
+    # Remove bold/italic markers for DOCX (styling could be enhanced later)
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    text = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', r'\1', text)
+    return text
+
+
+def _write_markdown_to_docx(document: Document, content: str, sop_title: str = "") -> None:
+    lines = content.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+        if not line.strip():
+            i += 1
+            continue
+
+        # Skip duplicate top-level title/number embedded in content
+        if line.startswith('# '):
+            embedded_title = line[2:].strip()
+            if sop_title and embedded_title.lower() == sop_title.lower():
+                # Skip this line and also skip an immediate 'Номер:' line if present
+                i += 1
+                if i < len(lines) and lines[i].strip().lower().startswith('номер:'):
+                    i += 1
+                continue
+
+        # Headings: #, ##, ###, #### -> map to DOCX heading levels
+        m = re.match(r'^(#{1,6})\s*(.+)$', line)
+        if m:
+            hashes = len(m.group(1))
+            text = _clean_md_inline(m.group(2).strip())
+            # Map: '#' -> level 1 (we already used level 0 for main doc title), '##'->2, etc.
+            level = min(max(hashes, 1), 6) - 0  # keep as 1..6
+            document.add_heading(text, level=level)
+            i += 1
+            continue
+
+        # Markdown table block: detect separator row and collect contiguous table lines
+        if '|' in line:
+            # Look ahead to see if a separator row exists in next few lines
+            j = i
+            table_lines: List[str] = []
+            saw_separator = False
+            while j < len(lines) and '|' in lines[j]:
+                if _is_md_table_separator(lines[j]):
+                    saw_separator = True
+                table_lines.append(lines[j])
+                j += 1
+            if saw_separator:
+                # Build table data (skip separator row)
+                table_data: List[List[str]] = []
+                for tl in table_lines:
+                    if _is_md_table_separator(tl):
+                        continue
+                    cells = [c.strip() for c in tl.strip().split('|')]
+                    # Remove empty first/last due to leading/ending pipe
+                    if cells and cells[0] == '':
+                        cells = cells[1:]
+                    if cells and cells[-1] == '':
+                        cells = cells[:-1]
+                    if cells:
+                        table_data.append(cells)
+                if table_data:
+                    cols = max(len(r) for r in table_data)
+                    table = document.add_table(rows=len(table_data), cols=cols)
+                    table.style = 'Light Grid Accent 1'
+                    for r_idx, row in enumerate(table_data):
+                        for c_idx, cell_text in enumerate(row):
+                            table.rows[r_idx].cells[c_idx].text = _clean_md_inline(cell_text)
+                i = j
+                continue
+            # else fall through to paragraph handling
+
+        # Bulleted lists (-, *, •). Use built-in List Bullet style
+        if re.match(r'^\s*([-*•–])\s+.+', line):
+            text = re.sub(r'^\s*([-*•–])\s+', '', line).strip()
+            p = document.add_paragraph(_clean_md_inline(text))
+            try:
+                p.style = 'List Bullet'
+            except Exception:
+                pass
+            i += 1
+            # Consume subsequent list lines
+            while i < len(lines) and re.match(r'^\s*([-*•–])\s+.+', lines[i]):
+                sub_text = re.sub(r'^\s*([-*•–])\s+', '', lines[i]).strip()
+                sp = document.add_paragraph(_clean_md_inline(sub_text))
+                try:
+                    sp.style = 'List Bullet'
+                except Exception:
+                    pass
+                i += 1
+            continue
+
+        # Regular paragraph: accumulate until blank line
+        para_lines = [line]
+        i += 1
+        while i < len(lines) and lines[i].strip() and not re.match(r'^(#{1,6})\s+', lines[i]):
+            # Stop if next block is a table or list indicator to keep paragraphs scoped
+            if '|' in lines[i] or re.match(r'^\s*([-*•–])\s+.+', lines[i]):
+                break
+            para_lines.append(lines[i].rstrip())
+            i += 1
+        paragraph_text = _clean_md_inline('\n'.join(para_lines))
+        document.add_paragraph(paragraph_text)
+
+
 def populate_docx(document: Document, sop_meta: Dict[str, Any], sections: List[Dict[str, Any]]) -> Document:
     title = sop_meta.get("title", "СОП")
     number = sop_meta.get("number", "")
 
+    # Main title
     document.add_heading(f"{title}", level=0)
     if number:
         document.add_paragraph(f"Номер: {number}")
 
+    # If there's a single consolidated section, avoid adding an extra section heading
+    if len(sections) == 1:
+        body = sections[0].get("content", "")
+        _write_markdown_to_docx(document, body, sop_title=title)
+        return document
+
+    # Otherwise, render each section with its heading and body
     for idx, section in enumerate(sections, start=1):
         document.add_heading(f"{idx}. {section['title']}", level=1)
         body = section.get("content", "")
-        
-        # Split content into paragraphs and handle tables
-        paragraphs = body.split("\n\n")
-        for para in paragraphs:
-            para = para.strip()
-            if not para:
-                continue
-                
-            # Check if it's a table
-            if '|' in para and ('---' in para or '━' in para):
-                # Handle markdown table
-                lines = para.split('\n')
-                table_data = []
-                for line in lines:
-                    if '|' in line and not (line.strip().startswith('|---') or line.strip().startswith('|━')):
-                        cells = [cell.strip() for cell in line.split('|') if cell.strip()]
-                        if cells:
-                            table_data.append(cells)
-                
-                if table_data:
-                    # Add table to document
-                    table = document.add_table(rows=len(table_data), cols=len(table_data[0]) if table_data else 1)
-                    table.style = 'Light Grid Accent 1'
-                    for row_idx, row_data in enumerate(table_data):
-                        for col_idx, cell_data in enumerate(row_data):
-                            if col_idx < len(table.rows[row_idx].cells):
-                                table.rows[row_idx].cells[col_idx].text = cell_data
-            else:
-                # Regular paragraph - handle basic markdown
-                # Remove markdown formatting for DOCX (since DOCX handles styling differently)
-                clean_para = re.sub(r'\*\*(.*?)\*\*', r'\1', para)  # Remove bold markers
-                clean_para = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', r'\1', clean_para)  # Remove italic markers
-                document.add_paragraph(clean_para)
+        _write_markdown_to_docx(document, body, sop_title=title)
     return document
 
 
