@@ -219,9 +219,12 @@ def _enforce_strict_outline(clean_content: str) -> str:
     current_official: str | None = None
     buffer: list[str] = []
 
+    def _buffer_has_text(buf: list[str]) -> bool:
+        return any((l.strip() for l in buf))
+
     def _flush():
         nonlocal current_official, buffer
-        if current_official is not None and buffer:
+        if current_official is not None and _buffer_has_text(buffer):
             if current_official not in used:
                 collected[current_official] = buffer.copy()
                 used.add(current_official)
@@ -250,8 +253,8 @@ def _enforce_strict_outline(clean_content: str) -> str:
     out_lines: list[str] = []
     for idx, official in enumerate(MANDATORY_SECTION_TITLES, start=1):
         section_body_lines = [l for l in collected.get(official, [])]
-        if not section_body_lines:
-            # If no content captured, skip empty section to avoid placeholders
+        # Skip sections whose body has no non-blank content
+        if not any(l.strip() for l in section_body_lines):
             continue
         out_lines.append(f"## {idx}. {official}")
         # Trim leading/trailing blanks within section

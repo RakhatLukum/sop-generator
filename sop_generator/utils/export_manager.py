@@ -43,8 +43,13 @@ def _write_markdown_to_docx(document: Document, content: str, sop_title: str = "
         if line.startswith('# '):
             embedded_title = line[2:].strip()
             if sop_title and embedded_title.lower() == sop_title.lower():
-                # Skip this line and also skip an immediate 'Номер:' line if present
+                # Skip '# Title' and up to two following blank lines
                 i += 1
+                skipped = 0
+                while i < len(lines) and skipped < 2 and not lines[i].strip():
+                    i += 1
+                    skipped += 1
+                # If the next non-blank line is 'Номер:', skip it too
                 if i < len(lines) and lines[i].strip().lower().startswith('номер:'):
                     i += 1
                 continue

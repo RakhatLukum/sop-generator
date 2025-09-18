@@ -6,9 +6,9 @@ python-docx>=0.8.11
 pandas>=2.0.0
 numpy>=1.24.0
 
-# Document processing
-pdf2image>=2.1.0
-pytesseract>=0.3.10
+# Document processing (advanced OCR is optional and disabled if deps missing)
+# pdf2image>=2.1.0  # removed for Streamlit Cloud compatibility
+# pytesseract>=0.3.10  # removed for Streamlit Cloud compatibility
 Pillow>=9.0.0
 
 # PDF generation
@@ -17,7 +17,7 @@ reportlab>=4.0.0
 # Charts and visualization
 plotly>=5.0.0
 
-# AutoGen dependencies
-autogen-agentchat>=0.7.4
-autogen-core>=0.7.4
-autogen-ext>=0.7.4
+# AutoGen dependencies (not required with USE_SIMPLE_AGENT=true)
+# autogen-agentchat>=0.7.4
+# autogen-core>=0.7.4
+# autogen-ext>=0.7.4
