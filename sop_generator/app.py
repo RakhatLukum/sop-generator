@@ -215,17 +215,20 @@ def ui_preview_and_export():
             with open(out_path, "rb") as f:
                 st.download_button("Скачать PDF", f, file_name="sop_generated.pdf")
     with col3:
-        if st.button("Экспорт в Markdown (docs/)"):
-            docs_dir = os.path.join(os.path.dirname(__file__), "..", "docs")
-            os.makedirs(docs_dir, exist_ok=True)
-            md_path = os.path.abspath(os.path.join(docs_dir, "sop_generated.md"))
-            with open(md_path, "w", encoding="utf-8") as mf:
-                mf.write(f"# {st.session_state.meta.get('title','СОП')}\n\n")
-                if st.session_state.meta.get("number"):
-                    mf.write(f"Номер: {st.session_state.meta['number']}\n\n")
-                for idx, sec in enumerate(st.session_state.preview, start=1):
-                    mf.write(f"## {idx}. {sec['title']}\n\n{sec.get('content','')}\n\n")
-            st.success(f"Сохранено: {md_path}")
+        # Build Markdown content and offer direct download (no saving to docs/)
+        title = st.session_state.meta.get("title", "СОП") or "СОП"
+        number = st.session_state.meta.get("number", "")
+        md_lines = [f"# {title}", ""]
+        if number:
+            md_lines.append(f"Номер: {number}")
+            md_lines.append("")
+        for idx, sec in enumerate(st.session_state.preview, start=1):
+            md_lines.append(f"## {idx}. {sec['title']}")
+            md_lines.append("")
+            md_lines.append(sec.get("content", ""))
+            md_lines.append("")
+        md_content = "\n".join(md_lines)
+        st.download_button("Скачать Markdown", data=md_content, file_name="sop_generated.md", mime="text/markdown", key="download_md")
 
 
 def run_generation_safe():
@@ -273,7 +276,7 @@ def run_generation():
         sop_gen=sop_gen,
         critic=critic,
         base_instruction_builder=base_instruction_builder,
-        max_iters=2,  # Reduced for faster generation
+        max_iters=3,  # Reduced for faster generation
         logger=add_log,
     )
 
@@ -367,7 +370,7 @@ def main():
 
     with tabs[2]:
         ui_generate()
-
+    
     with tabs[3]:
         ui_preview_and_export()
 

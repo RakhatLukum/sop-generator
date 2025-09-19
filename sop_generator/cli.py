@@ -2,13 +2,13 @@ import os
 import argparse
 from typing import List, Dict, Any
 
-from agents import (
+from sop_generator.agents import (
     build_sop_generator,
     build_critic,
     build_generation_instruction,
     summarize_parsed_chunks,
 )
-from agents.coordinator import iterative_generate_until_approved
+from sop_generator.agents.coordinator import iterative_generate_until_approved
 from sop_generator.utils.document_processor import parse_documents_to_chunks
 
 
@@ -48,25 +48,15 @@ def run_iterative(title: str, number: str, equipment: str, docs: List[str], sect
 
     generated_full_text = loop_result.get("content", "")
 
-    # Build single consolidated SOP preview
-    def build_single_preview(content: str, meta: dict) -> list:
-        title = meta.get("title") if isinstance(meta, dict) else title
-        number = meta.get("number") if isinstance(meta, dict) else number
-        header_lines = [f"# {title}"]
-        if number:
-            header_lines.append("")
-            header_lines.append(f"Номер: {number}")
-            header_lines.append("")
-        body = content.strip()
-        full = "\n".join(header_lines + [body])
-        return [{"title": title, "content": full}]
-
-    preview = build_single_preview(generated_full_text, {"title": title, "number": number})
-
-    return {"approved": loop_result.get("approved", False), "preview": preview, "logs": loop_result.get("logs", [])}
+    return {
+        "approved": loop_result.get("approved", False),
+        "content": generated_full_text,
+        "logs": loop_result.get("logs", []),
+    }
 
 
 # Group chat modes removed to simplify to two-agent workflow
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run SOP generation (Generator + Critic)")
@@ -90,8 +80,9 @@ def main() -> None:
         mf.write(f"# {args.title}\n\n")
         if args.number:
             mf.write(f"Номер: {args.number}\n\n")
-        for idx, sec in enumerate(result["preview"], start=1):
-            mf.write(f"## {idx}. {sec['title']}\n\n{sec.get('content','')}\n\n")
+        content = (result.get("content") or "").strip()
+        if content:
+            mf.write(content + "\n")
 
     if args.save_transcript:
         os.makedirs(os.path.dirname(args.transcript), exist_ok=True)

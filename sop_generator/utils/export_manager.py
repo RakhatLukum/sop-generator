@@ -67,36 +67,47 @@ def _write_markdown_to_docx(document: Document, content: str, sop_title: str = "
 
         # Markdown table block: detect separator row and collect contiguous table lines
         if '|' in line:
-            # Look ahead to see if a separator row exists in next few lines
+            # Collect a block until a blank line, a new header, or a list item
             j = i
-            table_lines: List[str] = []
+            block_lines: List[str] = []
             saw_separator = False
-            while j < len(lines) and '|' in lines[j]:
-                if _is_md_table_separator(lines[j]):
+            while j < len(lines):
+                next_line = lines[j]
+                if not next_line.strip():
+                    break
+                if re.match(r'^(#{1,6})\s+', next_line) or re.match(r'^\s*([-*•–])\s+.+', next_line):
+                    break
+                block_lines.append(next_line)
+                if _is_md_table_separator(next_line) or ('---' in next_line) or ('━' in next_line):
                     saw_separator = True
-                table_lines.append(lines[j])
                 j += 1
-            if saw_separator:
-                # Build table data (skip separator row)
+            if saw_separator and any('|' in bl for bl in block_lines):
+                # Build table data (skip separator-like rows)
                 table_data: List[List[str]] = []
-                for tl in table_lines:
-                    if _is_md_table_separator(tl):
+                for bl in block_lines:
+                    # Skip separator rows such as |---|:---:|---|
+                    if _is_md_table_separator(bl) or re.match(r'^\s*\|?\s*[-:━—\s]+\|?(\s*\|[-:━—\s]+\|?)*\s*$', bl):
                         continue
-                    cells = [c.strip() for c in tl.strip().split('|')]
-                    # Remove empty first/last due to leading/ending pipe
-                    if cells and cells[0] == '':
-                        cells = cells[1:]
-                    if cells and cells[-1] == '':
-                        cells = cells[:-1]
-                    if cells:
-                        table_data.append(cells)
+                    if '|' in bl:
+                        cells = [c.strip() for c in bl.split('|')]
+                        # Trim empty boundary cells
+                        if cells and cells[0] == '':
+                            cells = cells[1:]
+                        if cells and cells[-1] == '':
+                            cells = cells[:-1]
+                        if cells:
+                            table_data.append(cells)
                 if table_data:
                     cols = max(len(r) for r in table_data)
                     table = document.add_table(rows=len(table_data), cols=cols)
-                    table.style = 'Light Grid Accent 1'
+                    try:
+                        table.style = 'Light Grid Accent 1'
+                    except Exception:
+                        pass
                     for r_idx, row in enumerate(table_data):
-                        for c_idx, cell_text in enumerate(row):
-                            table.rows[r_idx].cells[c_idx].text = _clean_md_inline(cell_text)
+                        for c_idx in range(cols):
+                            cell_text = _clean_md_inline(row[c_idx] if c_idx < len(row) else '')
+                            table.rows[r_idx].cells[c_idx].text = cell_text
                 i = j
                 continue
             # else fall through to paragraph handling
@@ -134,7 +145,57 @@ def _write_markdown_to_docx(document: Document, content: str, sop_title: str = "
         document.add_paragraph(paragraph_text)
 
 
+def _clear_document_content(document: Document) -> None:
+    """Remove all existing body, header, and footer content from a Document while preserving styles and page settings."""
+    try:
+        # Clear body paragraphs
+        for p in list(document.paragraphs):
+            try:
+                p._element.getparent().remove(p._element)
+            except Exception:
+                pass
+        # Clear body tables
+        for t in list(document.tables):
+            try:
+                t._element.getparent().remove(t._element)
+            except Exception:
+                pass
+        # Clear headers and footers content
+        for section in list(document.sections):
+            try:
+                hdr = section.header
+                for p in list(hdr.paragraphs):
+                    try:
+                        p._element.getparent().remove(p._element)
+                    except Exception:
+                        pass
+                for t in list(hdr.tables):
+                    try:
+                        t._element.getparent().remove(t._element)
+                    except Exception:
+                        pass
+                ftr = section.footer
+                for p in list(ftr.paragraphs):
+                    try:
+                        p._element.getparent().remove(p._element)
+                    except Exception:
+                        pass
+                for t in list(ftr.tables):
+                    try:
+                        t._element.getparent().remove(t._element)
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+    except Exception:
+        # Best-effort cleanup; ignore if document structure differs
+        pass
+
+
 def populate_docx(document: Document, sop_meta: Dict[str, Any], sections: List[Dict[str, Any]]) -> Document:
+    # Ensure the output includes only generated content (no leftover template body)
+    _clear_document_content(document)
+
     title = sop_meta.get("title", "СОП")
     number = sop_meta.get("number", "")
 
