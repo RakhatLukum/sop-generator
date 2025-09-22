@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import tempfile
+import time
 from typing import List, Dict, Any
 
 # Add parent directory to Python path for module resolution
@@ -13,8 +14,6 @@ if parent_dir not in sys.path:
 import streamlit as st
 import threading
 from streamlit.runtime.scriptrunner import add_script_run_ctx
-from typing import List, Dict, Any
-import os
 from datetime import datetime
 import shutil
 
@@ -36,6 +35,14 @@ from sop_generator.utils.template_manager import load_template, apply_styles
 # )
 
 APP_TITLE = "SOP Generator (AutoGen + Streamlit)"
+
+
+def _request_rerun(delay_seconds: float = 1.0) -> None:
+    """Trigger a Streamlit rerun, compatible with multiple versions."""
+    time.sleep(delay_seconds)
+    rerun = getattr(st, "experimental_rerun", None) or getattr(st, "rerun", None)
+    if rerun:
+        rerun()
 
 
 def init_session_state() -> None:
@@ -168,7 +175,8 @@ def ui_generate():
     st.text("\n".join(st.session_state.logs[-50:]))
     # Auto-refresh hint for long runs
     if st.session_state.running:
-        st.caption("Задача выполняется... Обновите вкладку или перейдите между вкладками для обновления логов.")
+        st.caption("Задача выполняется... Интерфейс обновляется автоматически.")
+        _request_rerun()
 
 
 def ui_preview_and_export():
@@ -238,6 +246,7 @@ def run_generation_safe():
         add_log(f"Ошибка: {e}")
     finally:
         st.session_state.running = False
+        st.session_state.worker = None
 
 
 def run_generation():

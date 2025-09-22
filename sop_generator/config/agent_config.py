@@ -8,9 +8,9 @@ load_dotenv()
 
 
 # Custom LLM server configuration (no-auth)
-CUSTOM_LLM_BASE = "https://hmw6p24zvcdgay-8000.proxy.runpod.net/v1"
+CUSTOM_LLM_BASE = "https://8r6dfre4zly04c-8000.proxy.runpod.net/v1"
 CUSTOM_LLM_MODEL = "llama4scout"
-RUNPOD_HOST_SNIPPET = "hmw6p24zvcdgay-8000.proxy.runpod.net"
+RUNPOD_HOST_SNIPPET = "8r6dfre4zly04c-8000.proxy.runpod.net"
 
 
 @dataclass
