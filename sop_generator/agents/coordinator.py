@@ -462,6 +462,7 @@ def iterative_generate_until_approved(
     critic: AssistantAgent,
     base_instruction_builder,
     max_iters: int = 5,
+    enforce_mandatory_sections: bool = True,
     logger: Callable[[str], None] | None = None,
     auto_backfill_meta: Dict[str, Any] | None = None,
     auto_backfill_summary: str | None = None,
@@ -479,6 +480,8 @@ def iterative_generate_until_approved(
 
     for iteration in range(1, max_iters + 1):
         _log(f"Итерация {iteration}: генерация...")
+        structural_feedback = ""
+
         try:
             gen_msgs = _run_agent_and_get_messages(
                 sop_gen,
@@ -487,44 +490,48 @@ def iterative_generate_until_approved(
             raw_generated_content = "\n\n".join([m.content for m in gen_msgs if isinstance(m, TextMessage)])
             # Extract only the clean SOP content from generator
             clean_sop_content = _extract_clean_sop_content(raw_generated_content)
-            # Enforce strict outline formatting (## N. Title)
-            clean_sop_content = _enforce_strict_outline(clean_sop_content)
-            if auto_backfill_meta is not None:
-                clean_sop_content, _ = _auto_backfill_sections(
-                    clean_sop_content,
-                    sop_gen,
-                    auto_backfill_meta,
-                    auto_backfill_summary,
-                    logger=_log,
-                )
+            if enforce_mandatory_sections:
+                # Enforce strict outline formatting (## N. Title)
+                clean_sop_content = _enforce_strict_outline(clean_sop_content)
+                if auto_backfill_meta is not None:
+                    clean_sop_content, _ = _auto_backfill_sections(
+                        clean_sop_content,
+                        sop_gen,
+                        auto_backfill_meta,
+                        auto_backfill_summary,
+                        logger=_log,
+                    )
+            else:
+                clean_sop_content = clean_sop_content.strip()
             _log(f"Генерация завершена. Длина: {len(clean_sop_content)} симв.")
         except Exception as e:
             _log(f"Ошибка генератора: {e}")
             break
 
-        # Structural validation to ensure all mandatory sections are present
-        validator = SOPSectionValidator()
-        found_sections, missing_sections = validator.validate_section_presence(clean_sop_content)
-        section_quality = validator.validate_section_content_quality(clean_sop_content)
+        if enforce_mandatory_sections:
+            # Structural validation to ensure all mandatory sections are present
+            validator = SOPSectionValidator()
+            _, missing_sections = validator.validate_section_presence(clean_sop_content)
+            section_quality = validator.validate_section_content_quality(clean_sop_content)
 
-        structural_feedback_parts: list[str] = []
-        if missing_sections:
-            structural_feedback_parts.append(
-                "Добавь недостающие обязательные разделы: " + ", ".join(missing_sections)
-            )
+            structural_feedback_parts: list[str] = []
+            if missing_sections:
+                structural_feedback_parts.append(
+                    "Добавь недостающие обязательные разделы: " + ", ".join(missing_sections)
+                )
 
-        weak_sections = [
-            title for title, info in section_quality.items()
-            if info.get("found") and not info.get("has_sufficient_keywords")
-        ]
-        if weak_sections:
-            structural_feedback_parts.append(
-                "Усиль содержательное наполнение разделов: " + ", ".join(weak_sections)
-            )
+            weak_sections = [
+                title for title, info in section_quality.items()
+                if info.get("found") and not info.get("has_sufficient_keywords")
+            ]
+            if weak_sections:
+                structural_feedback_parts.append(
+                    "Усиль содержательное наполнение разделов: " + ", ".join(weak_sections)
+                )
 
-        structural_feedback = "\n".join(structural_feedback_parts)
-        if structural_feedback:
-            _log(f"Структурные замечания: {structural_feedback}")
+            structural_feedback = "\n".join(structural_feedback_parts)
+            if structural_feedback:
+                _log(f"Структурные замечания: {structural_feedback}")
 
         _log("Рецензирование критиком...")
         try:

@@ -286,9 +286,10 @@ def run_generation():
         critic=critic,
         base_instruction_builder=base_instruction_builder,
         max_iters=5,
+        enforce_mandatory_sections=False,
         logger=add_log,
-        auto_backfill_meta=st.session_state.meta,
-        auto_backfill_summary=corpus_summary if corpus_summary else None,
+        auto_backfill_meta=None,
+        auto_backfill_summary=None,
     )
 
     add_log("Сборка разделов...")
