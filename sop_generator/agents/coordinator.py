@@ -4,6 +4,7 @@ import os
 import re
 
 from sop_generator.agents.base_imports import AssistantAgent, TextMessage, BaseChatMessage, MockResult
+from sop_generator.utils.section_validator import SOPSectionValidator
 
 
 # Helper: run a single agent with a user task and collect messages, with timeout
@@ -171,7 +172,7 @@ _SECTION_SYNONYMS: dict[str, list[str]] = {
     "Ответственность и обучение": ["ответствен", "обучен", "квалификац", "роли", "персонал"],
     "Анализ рисков и безопасность": ["риск", "опасн", "безопасн", "сиз", "предупрежд"],
     "Оборудование и материалы": ["оборудован", "материал", "спецификац", "модель", "комплектация"],
-    "Пошаговые процедуры": ["процедур", "шаг", "порядок", "инструкция", "выполнен"],
+    "Пошаговые процедуры": ["процедур", "шаг", "порядок", "инструкция", "выполнен", "последователь", "операц", "этап", "процесс", "workflow"],
     "Контроль качества": ["качест", "контроль", "приемк", "валидац", "критер"],
     "Документооборот и записи": ["документ", "запис", "учет", "журнал", "архив"],
     "Нормативные ссылки": ["ссылк", "норматив", "стандарт", "gost", "iso"],
@@ -232,17 +233,43 @@ def _enforce_strict_outline(clean_content: str) -> str:
 
     for line in lines:
         if _is_header(line):
-            # Before switching, flush
+            # Before switching, flush collected content for the previous section
             _flush()
-            # Determine mapped official
-            # Extract raw header text without leading hashes and numbering
-            raw = re.sub(r"^#+\s*", "", line.strip())
-            raw = re.sub(r"^\d+\.\s*", "", raw)
-            raw = raw.strip().strip('*').strip()
-            mapped = _map_to_official(raw)
+
+            stripped = line.strip()
+            stripped = stripped.lstrip('#').strip()
+            stripped = stripped.strip('*').strip()
+
+            mapped = None
+            header_core = stripped
+
+            # Detect explicit numbering like "5." or "Раздел 5." to map by index
+            number_match = re.match(r"^(?:раздел\s+)?(\d+)[\.|\)]?\s*(.*)$", header_core, re.IGNORECASE)
+            if number_match:
+                section_idx = int(number_match.group(1))
+                if 1 <= section_idx <= len(MANDATORY_SECTION_TITLES):
+                    mapped = MANDATORY_SECTION_TITLES[section_idx - 1]
+                header_core = number_match.group(2).strip()
+
+            # Remove residual numeric prefixes like "-" or "–" after the number
+            header_core = re.sub(r"^[\-–—)]\s*", "", header_core)
+
+            # Try to map header text to an official title using synonyms
+            mapped = mapped or _map_to_official(header_core)
+            if not mapped and header_core:
+                mapped = _map_to_official(header_core.rstrip('.'))
+
+            # As a final fallback, attempt to map using the original stripped header
+            if not mapped:
+                remaining = [title for title in MANDATORY_SECTION_TITLES if title not in used]
+                if remaining:
+                    mapped = remaining[0]
+            if not mapped:
+                mapped = _map_to_official(stripped)
+
             current_official = mapped
             continue
-        # Accumulate
+        # Accumulate section body lines only when we have an active mapped section
         if current_official is not None:
             buffer.append(line)
 
@@ -308,6 +335,30 @@ def iterative_generate_until_approved(
             _log(f"Ошибка генератора: {e}")
             break
 
+        # Structural validation to ensure all mandatory sections are present
+        validator = SOPSectionValidator()
+        found_sections, missing_sections = validator.validate_section_presence(clean_sop_content)
+        section_quality = validator.validate_section_content_quality(clean_sop_content)
+
+        structural_feedback_parts: list[str] = []
+        if missing_sections:
+            structural_feedback_parts.append(
+                "Добавь недостающие обязательные разделы: " + ", ".join(missing_sections)
+            )
+
+        weak_sections = [
+            title for title, info in section_quality.items()
+            if info.get("found") and not info.get("has_sufficient_keywords")
+        ]
+        if weak_sections:
+            structural_feedback_parts.append(
+                "Усиль содержательное наполнение разделов: " + ", ".join(weak_sections)
+            )
+
+        structural_feedback = "\n".join(structural_feedback_parts)
+        if structural_feedback:
+            _log(f"Структурные замечания: {structural_feedback}")
+
         _log("Рецензирование критиком...")
         try:
             critic_prompt = f"""Оцени документ по протоколу (SUMMARY/ISSUES/STATUS).
@@ -323,6 +374,10 @@ def iterative_generate_until_approved(
         except Exception as e:
             _log(f"Ошибка критика: {e}")
             break
+
+        if structural_feedback:
+            status_approved = False
+            feedback = (feedback + "\n\n" + structural_feedback).strip() if feedback else structural_feedback
 
         if status_approved:
             _log("Документ одобрен критиком.")
