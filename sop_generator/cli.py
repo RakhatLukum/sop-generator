@@ -42,8 +42,15 @@ def run_iterative(title: str, number: str, equipment: str, docs: List[str], sect
         sop_gen=sop_gen,
         critic=critic,
         base_instruction_builder=base_instruction_builder,
-        max_iters=3,  # fast default
+        max_iters=5,
         logger=lambda m: None,
+        auto_backfill_meta={
+            "title": title,
+            "number": number,
+            "equipment": equipment,
+            "equipment_type": equipment,
+        },
+        auto_backfill_summary=corpus_summary if corpus_summary else None,
     )
 
     generated_full_text = loop_result.get("content", "")

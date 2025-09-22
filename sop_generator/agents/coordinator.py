@@ -4,7 +4,7 @@ import os
 import re
 
 from sop_generator.agents.base_imports import AssistantAgent, TextMessage, BaseChatMessage, MockResult
-from sop_generator.utils.section_validator import SOPSectionValidator
+from sop_generator.utils.section_validator import SOPSectionValidator, create_mandatory_sections_template
 
 
 # Helper: run a single agent with a user task and collect messages, with timeout
@@ -278,26 +278,183 @@ def _enforce_strict_outline(clean_content: str) -> str:
 
     # Build the final document in strict order
     out_lines: list[str] = []
+    placeholder_template = "**Требуется дополнить этот раздел детальными данными.**"
+
     for idx, official in enumerate(MANDATORY_SECTION_TITLES, start=1):
         section_body_lines = [l for l in collected.get(official, [])]
-        # Skip sections whose body has no non-blank content
-        if not any(l.strip() for l in section_body_lines):
-            continue
+        has_content = any(l.strip() for l in section_body_lines)
+
         out_lines.append(f"## {idx}. {official}")
-        # Trim leading/trailing blanks within section
-        # and collapse excessive blank lines inside the section body
-        prev_blank = True
-        for l in section_body_lines:
-            is_blank = not l.strip()
-            if is_blank and prev_blank:
-                continue
-            out_lines.append(l)
-            prev_blank = is_blank
+
+        if has_content:
+            # Trim leading/trailing blanks within section and collapse excessive blank lines
+            prev_blank = True
+            for l in section_body_lines:
+                is_blank = not l.strip()
+                if is_blank and prev_blank:
+                    continue
+                out_lines.append(l)
+                prev_blank = is_blank
+        else:
+            out_lines.append(placeholder_template)
+
         out_lines.append("")
 
     # Return formatted document (without leading/trailing newlines)
     return "\n".join([l.rstrip() for l in out_lines]).strip()
 
+
+def _get_section_block(document: str, section_title: str) -> str | None:
+    try:
+        idx = MANDATORY_SECTION_TITLES.index(section_title) + 1
+    except ValueError:
+        return None
+    pattern = re.compile(
+        rf"##\s+{idx}\.\s+{re.escape(section_title)}\s*\n.*?(?=\n##\s+\d+\.\s+|$)",
+        re.DOTALL
+    )
+    match = pattern.search(document)
+    if match:
+        return match.group(0).strip()
+    return None
+
+
+def _get_section_body(document: str, section_title: str) -> str:
+    block = _get_section_block(document, section_title)
+    if not block:
+        return ""
+    lines = block.splitlines()
+    if lines and lines[0].strip().startswith("##"):
+        lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
+def _remove_section_block(document: str, section_title: str) -> str:
+    block = _get_section_block(document, section_title)
+    if not block:
+        return document
+    return document.replace(block, "").strip()
+
+
+def _replace_section_block(document: str, section_title: str, new_block: str) -> str:
+    try:
+        idx = MANDATORY_SECTION_TITLES.index(section_title) + 1
+    except ValueError:
+        return document
+
+    new_block = new_block.strip()
+    if not new_block:
+        return document
+
+    if not new_block.lower().startswith(f"## {idx}."):
+        header = f"## {idx}. {section_title}"
+        new_block = f"{header}\n\n{new_block.strip()}"
+
+    pattern = re.compile(
+        rf"##\s+{idx}\.\s+{re.escape(section_title)}\s*\n.*?(?=\n##\s+\d+\.\s+|$)",
+        re.DOTALL
+    )
+    match = pattern.search(document)
+    replacement = new_block.strip() + "\n\n"
+    if match:
+        return document[:match.start()] + replacement + document[match.end():]
+
+    if idx == 1:
+        return replacement + document
+
+    prev_title = MANDATORY_SECTION_TITLES[idx - 2]
+    prev_pattern = re.compile(
+        rf"##\s+{idx - 1}\.\s+{re.escape(prev_title)}\s*\n.*?(?=\n##\s+\d+\.\s+|$)",
+        re.DOTALL
+    )
+    prev_match = prev_pattern.search(document)
+    if prev_match:
+        insert_pos = prev_match.end()
+        return document[:insert_pos] + "\n" + replacement + document[insert_pos:]
+
+    return document.rstrip() + "\n\n" + replacement
+
+
+def _auto_backfill_sections(
+    document: str,
+    sop_agent: AssistantAgent,
+    meta: Dict[str, Any],
+    corpus_summary: str | None,
+    logger: Callable[[str], None] | None = None,
+) -> tuple[str, list[str]]:
+    validator = SOPSectionValidator()
+    _, missing_sections = validator.validate_section_presence(document)
+    quality = validator.validate_section_content_quality(document)
+
+    placeholder_marker = "**Требуется дополнить этот раздел детальными данными.**"
+    sections_to_fill: set[str] = set(missing_sections)
+
+    for title in MANDATORY_SECTION_TITLES:
+        body = _get_section_body(document, title)
+        info = quality.get(title, {})
+        if not body:
+            sections_to_fill.add(title)
+            continue
+        if placeholder_marker in body:
+            sections_to_fill.add(title)
+            continue
+        if not info.get("meets_min_length", True):
+            sections_to_fill.add(title)
+            continue
+        if not info.get("has_sufficient_keywords", True):
+            sections_to_fill.add(title)
+            continue
+
+    if not sections_to_fill:
+        return document, []
+
+    templates = {item["title"]: item.get("prompt", "") for item in create_mandatory_sections_template()}
+    filled_sections: list[str] = []
+
+    for title in sections_to_fill:
+        try:
+            section_idx = MANDATORY_SECTION_TITLES.index(title) + 1
+        except ValueError:
+            continue
+
+        context_without_section = _remove_section_block(document, title)
+        template_hint = templates.get(title, "")
+
+        prompt_parts = [
+            "Ты выступаешь как профессиональный автор стандартных операционных процедур.",
+            "Сформируй полностью содержимое конкретного раздела СОП.",
+            f"Название документа: {meta.get('title') or 'СОП'} (№ {meta.get('number') or '—'})",
+        ]
+        equipment = meta.get('equipment') or meta.get('equipment_type')
+        if equipment:
+            prompt_parts.append(f"Тип оборудования: {equipment}")
+        prompt_parts.append(
+            f"Раздел: '## {section_idx}. {title}'. Верни только этот раздел в Markdown, не добавляй другие разделы и комментарии."
+        )
+        if template_hint:
+            prompt_parts.append(template_hint)
+        if corpus_summary:
+            prompt_parts.append(f"Сводка по документам:\n{corpus_summary.strip()}")
+        if context_without_section:
+            prompt_parts.append(
+                "Контекст других разделов (оставь их без изменений, не копируй):\n" + context_without_section.strip()
+            )
+
+        prompt = "\n\n".join(part for part in prompt_parts if part).strip()
+
+        messages = _run_agent_and_get_messages(sop_agent, prompt)
+        section_text = "\n\n".join(m.content for m in messages if isinstance(m, TextMessage)).strip()
+        if not section_text:
+            continue
+
+        document = _replace_section_block(document, title, section_text)
+        filled_sections.append(title)
+
+    if filled_sections and logger:
+        logger("Автодополнение разделов: " + ", ".join(filled_sections))
+
+    document = _enforce_strict_outline(document)
+    return document, filled_sections
 
 
 def iterative_generate_until_approved(
@@ -306,6 +463,8 @@ def iterative_generate_until_approved(
     base_instruction_builder,
     max_iters: int = 5,
     logger: Callable[[str], None] | None = None,
+    auto_backfill_meta: Dict[str, Any] | None = None,
+    auto_backfill_summary: str | None = None,
 ) -> Dict[str, Any]:
     logs: List[str] = []
     clean_sop_content: str = ""
@@ -330,6 +489,14 @@ def iterative_generate_until_approved(
             clean_sop_content = _extract_clean_sop_content(raw_generated_content)
             # Enforce strict outline formatting (## N. Title)
             clean_sop_content = _enforce_strict_outline(clean_sop_content)
+            if auto_backfill_meta is not None:
+                clean_sop_content, _ = _auto_backfill_sections(
+                    clean_sop_content,
+                    sop_gen,
+                    auto_backfill_meta,
+                    auto_backfill_summary,
+                    logger=_log,
+                )
             _log(f"Генерация завершена. Длина: {len(clean_sop_content)} симв.")
         except Exception as e:
             _log(f"Ошибка генератора: {e}")

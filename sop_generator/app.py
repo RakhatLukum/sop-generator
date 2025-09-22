@@ -285,8 +285,10 @@ def run_generation():
         sop_gen=sop_gen,
         critic=critic,
         base_instruction_builder=base_instruction_builder,
-        max_iters=3,  # Reduced for faster generation
+        max_iters=5,
         logger=add_log,
+        auto_backfill_meta=st.session_state.meta,
+        auto_backfill_summary=corpus_summary if corpus_summary else None,
     )
 
     add_log("Сборка разделов...")

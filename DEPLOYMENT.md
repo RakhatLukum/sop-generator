@@ -15,7 +15,7 @@ OPENAI_BASE_URL=https://llm.govplan.kz/v1
 ```
 
 ### 3. Dependencies
-The app will automatically install dependencies from `sop_generator/requirements.txt`.
+The app will automatically install dependencies from `requirements.txt`.
 
 ### 4. Optional Features
 Some features require additional system dependencies:
@@ -47,5 +47,5 @@ cp .env.example .env
 
 Run locally:
 ```bash
-streamlit run app_local.py
+streamlit run sop_generator/app.py
 ```
