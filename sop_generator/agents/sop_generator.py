@@ -101,33 +101,73 @@ def build_generation_instruction(
 - НЕ ВКЛЮЧАТЬ: нормальные рабочие процедуры"""
     }
     
-    for i, s in enumerate(enhanced_sections):
-        section_title = s['title'].lower()
-        section_spec = f"**РЕКОМЕНДУЕМЫЙ БЛОК {i+1}: {s['title']}**"
-        if user_sections:
-            section_spec += f" (режим: {s.get('mode', 'ai')})"
+    section_specifications: list[str] = []
+    if user_sections:
+        for s in enhanced_sections:
+            section_title = s['title']
+            section_key = section_title.lower()
+            block_lines: list[str] = [f"- **{section_title}**"]
+            if s.get('mode'):
+                block_lines.append(f"  - Режим пользователя: {s.get('mode', 'ai')}")
+            if s.get('prompt'):
+                block_lines.append(f"  - Требования пользователя: {s['prompt']}")
 
-        if s.get('prompt'):
-            section_spec += f"\nТребования пользователя: {s['prompt']}"
-        
-        # Add section-specific template
-        template_key = None
-        for key in section_templates.keys():
-            if key in section_title:
-                template_key = key
-                break
-        
-        if template_key:
-            section_spec += section_templates[template_key]
-        
-        section_spec += (
-            "\n**ПОМНИ:** Используй этот блок как ориентир. При необходимости "
-            "объединяй, переименовывай или опускай его, если это делает СОП более логичным. "
-            "Всегда избегай дублирования информации."
-        )
+            template_key = None
+            for key in section_templates.keys():
+                if key in section_key:
+                    template_key = key
+                    break
 
-        section_specifications.append(section_spec)
-    
+            if template_key:
+                template_hint = section_templates[template_key].strip()
+                block_lines.append("  - Рекомендуемый фокус (адаптируй при необходимости):")
+                for hint_line in template_hint.splitlines():
+                    block_lines.append(f"    {hint_line}")
+
+            block_lines.append(
+                "  - Используй этот пункт только если он усиливает итоговый документ; "
+                "можно объединять, переименовывать или опускать темы, чтобы структура "
+                "оставалась логичной и без повторов."
+            )
+
+            section_specifications.append("\n".join(block_lines))
+    else:
+        suggestion_lines: list[str] = []
+        for rec in recommended_sections:
+            title = rec.get('title', '').strip() or "Раздел"
+            template_key = None
+            lower_title = title.lower()
+            for key in section_templates.keys():
+                if key in lower_title:
+                    template_key = key
+                    break
+
+            focus_summary = ""
+            if template_key:
+                template_hint = section_templates[template_key]
+                focus_points = [
+                    line.strip('- ').strip()
+                    for line in template_hint.splitlines()
+                    if line.strip().startswith('-')
+                ]
+                if focus_points:
+                    focus_summary = "; ".join(focus_points[:3])
+
+            if focus_summary:
+                suggestion_lines.append(f"{title}: {focus_summary}")
+            else:
+                suggestion_lines.append(title)
+
+        if suggestion_lines:
+            section_specifications.append(
+                "- Рассмотри включение тем (при необходимости объединяй или заменяй их своими): "
+                + "; ".join(suggestion_lines)
+                + "."
+            )
+            section_specifications.append(
+                "- Добавляй собственные разделы, если они критичны для оборудования, процессов, обучения или контроля."
+            )
+
     structured_sections = "\n\n".join(section_specifications)
     
     critique_part = ""
@@ -143,10 +183,11 @@ def build_generation_instruction(
     return f"""Создай профессиональный СОП '{sop_title}' (№ {sop_number}) для оборудования: {equipment_type}.
 
 **СТРУКТУРА ДОКУМЕНТА:**
-- Построй оптимальную структуру. Количество разделов и их порядок определяешь ты на основе входных данных.
-- Используй Markdown: каждый основной раздел начинай с заголовка `##`.
-- Если пользователь указал разделы, сохрани их смысл и приоритет, но можешь объединять или расширять их при необходимости.
-- Избегай дублирования информации между разделами и обеспечивай логическую связность документа.
+- Сначала разработай оптимальную структуру — выбери количество разделов, подходящее под задачу (обычно 5–12, но опирайся на логику).
+- Используй Markdown: каждый основной раздел начинай с заголовка `##`, при необходимости добавляй подразделы `###`.
+- Если пользователь указал разделы, сохрани их смысл и приоритет, но объединяй или расширяй, когда это упрощает чтение.
+- Не считай рекомендованные темы обязательным перечнем; выбирай только нужные и дополняй собственными.
+- Избегай дублирования информации между разделами и обеспечивай связный поток.
 
 **РЕКОМЕНДУЕМЫЕ ТЕМЫ ДЛЯ ПОКРЫТИЯ (адаптируй по ситуации):**
 {section_guidance}

@@ -75,6 +75,7 @@ def add_log(message: str) -> None:
             st.session_state.logs = []
         st.session_state.logs.append(message)
         st.session_state.logs = st.session_state.logs[-500:]
+        print(f"[SOP] {message}", flush=True)
     except Exception:
         # Best-effort: ignore logging errors from threads without context
         pass

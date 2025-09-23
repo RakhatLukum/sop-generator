@@ -10,7 +10,13 @@ from sop_generator.utils.section_validator import SOPSectionValidator, create_ma
 # Helper: run a single agent with a user task and collect messages, with timeout
 
 
-def _run_agent_and_get_messages(agent: AssistantAgent, task: str, timeout_s: int | None = None) -> List[TextMessage]:
+def _run_agent_and_get_messages(
+    agent: AssistantAgent,
+    task: str,
+    timeout_s: int | None = None,
+    conversation_logger: Callable[[str], None] | None = None,
+    conversation_label: str | None = None,
+) -> List[TextMessage]:
     # Determine effective timeout: 0 or None disables timeout entirely
     env_timeout_raw = os.getenv("LLM_TIMEOUT", "").strip()
     env_timeout = None
@@ -49,7 +55,18 @@ def _run_agent_and_get_messages(agent: AssistantAgent, task: str, timeout_s: int
     
     # Return messages from result
     messages = getattr(result, "messages", [])
-    return [msg for msg in messages if isinstance(msg, (TextMessage, BaseChatMessage))]
+    chat_messages = [msg for msg in messages if isinstance(msg, (TextMessage, BaseChatMessage))]
+
+    if conversation_logger:
+        label = conversation_label or getattr(agent, "name", "Agent")
+        for msg in chat_messages:
+            content = getattr(msg, "content", "")
+            if not content:
+                continue
+            speaker = getattr(msg, "source", None) or getattr(msg, "sender", None) or label
+            conversation_logger(f"[{speaker}] {content.strip()}")
+
+    return chat_messages
 
 
 def _extract_clean_sop_content(raw_content: str) -> str:
@@ -442,7 +459,13 @@ def _auto_backfill_sections(
 
         prompt = "\n\n".join(part for part in prompt_parts if part).strip()
 
-        messages = _run_agent_and_get_messages(sop_agent, prompt)
+        conv_logger = (lambda text: logger(f"[AUTO] {text}")) if logger else None
+        messages = _run_agent_and_get_messages(
+            sop_agent,
+            prompt,
+            conversation_logger=conv_logger,
+            conversation_label=f"{sop_agent.name} (auto)" if hasattr(sop_agent, "name") else "Generator",
+        )
         section_text = "\n\n".join(m.content for m in messages if isinstance(m, TextMessage)).strip()
         if not section_text:
             continue
@@ -483,9 +506,12 @@ def iterative_generate_until_approved(
         structural_feedback = ""
 
         try:
+            gen_conv_logger = (lambda text: _log(f"[GENERATOR] {text}"))
             gen_msgs = _run_agent_and_get_messages(
                 sop_gen,
                 base_instruction_builder(feedback),
+                conversation_logger=gen_conv_logger,
+                conversation_label=getattr(sop_gen, "name", "Generator"),
             )
             raw_generated_content = "\n\n".join([m.content for m in gen_msgs if isinstance(m, TextMessage)])
             # Extract only the clean SOP content from generator
@@ -540,7 +566,13 @@ def iterative_generate_until_approved(
 ТЕКСТ СОП:
 {clean_sop_content}
 """
-            critic_msgs = _run_agent_and_get_messages(critic, critic_prompt)
+            critic_conv_logger = (lambda text: _log(f"[CRITIC] {text}"))
+            critic_msgs = _run_agent_and_get_messages(
+                critic,
+                critic_prompt,
+                conversation_logger=critic_conv_logger,
+                conversation_label=getattr(critic, "name", "Critic"),
+            )
             critic_texts = [m.content for m in critic_msgs if isinstance(m, TextMessage)]
             feedback = "\n\n".join(critic_texts)
             status_approved = any("STATUS:" in t and "APPROVED" in t for t in critic_texts)

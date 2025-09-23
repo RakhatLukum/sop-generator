@@ -38,12 +38,16 @@ def run_iterative(title: str, number: str, equipment: str, docs: List[str], sect
             critique_feedback=critique or None,
         )
 
+    def _cli_logger(message: str) -> None:
+        print(f"[SOP] {message}", flush=True)
+
     loop_result = iterative_generate_until_approved(
         sop_gen=sop_gen,
         critic=critic,
         base_instruction_builder=base_instruction_builder,
         max_iters=5,
-        logger=lambda m: None,
+        enforce_mandatory_sections=False,
+        logger=_cli_logger,
         auto_backfill_meta={
             "title": title,
             "number": number,
