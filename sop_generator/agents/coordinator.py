@@ -178,13 +178,27 @@ def _truncate_to_single_section(text: str) -> str:
     if not trimmed:
         return ""
 
-    numbered_header = re.search(r"\n##\s+\d+\.\s+", trimmed)
-    if numbered_header:
-        return trimmed[:numbered_header.start()].strip()
+    def _slice_from_first_header(header_pattern: str) -> str | None:
+        first = re.search(header_pattern, trimmed)
+        if not first:
+            return None
+        start = first.start()
+        # Look for the next section header starting after the current one
+        next_header = re.search(r"\n##\s+", trimmed[start + 1:])
+        if next_header:
+            end = start + 1 + next_header.start()
+            return trimmed[start:end].strip()
+        return trimmed[start:].strip()
 
-    any_header = re.search(r"\n##\s+", trimmed)
-    if any_header:
-        return trimmed[:any_header.start()].strip()
+    # Prefer numbered H2 sections like "## 1. ..."
+    result = _slice_from_first_header(r"##\s+\d+\.\s+")
+    if result is not None:
+        return result
+
+    # Fallback: grab the first H2 header even without numbering
+    result = _slice_from_first_header(r"##\s+")
+    if result is not None:
+        return result
 
     return trimmed
 
