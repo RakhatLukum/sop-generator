@@ -170,6 +170,131 @@ def _extract_clean_sop_content(raw_content: str) -> str:
     return '\n'.join(result_lines).strip()
 
 
+def _truncate_to_single_section(text: str) -> str:
+    """Keep only the first section-sized chunk of text."""
+    if not text:
+        return ""
+    trimmed = text.strip()
+    if not trimmed:
+        return ""
+
+    numbered_header = re.search(r"\n##\s+\d+\.\s+", trimmed)
+    if numbered_header:
+        return trimmed[:numbered_header.start()].strip()
+
+    any_header = re.search(r"\n##\s+", trimmed)
+    if any_header:
+        return trimmed[:any_header.start()].strip()
+
+    return trimmed
+
+
+def _normalize_section_output(index: int, title: str, raw_text: str) -> tuple[str, str]:
+    """Ensure section text has the expected header and return (full_section, body_only)."""
+    header = f"## {index}. {title}"
+    content = raw_text.strip()
+    if not content:
+        return header, ""
+
+    lines = content.splitlines()
+    if lines:
+        first_line = lines[0].strip()
+        if first_line.startswith('#') or (first_line.startswith('**') and first_line.endswith('**')):
+            lines = lines[1:]
+
+    body = "\n".join(lines).strip()
+    if body:
+        return f"{header}\n\n{body}", body
+    return header, ""
+
+
+def _generate_sections_incrementally(
+    sop_agent: AssistantAgent,
+    base_instruction: str,
+    sections: List[Dict[str, Any]],
+    meta: Dict[str, Any] | None,
+    corpus_summary: str | None,
+    logger: Callable[[str], None] | None = None,
+) -> tuple[str, List[Dict[str, str]]]:
+    accumulated_markdown: list[str] = []
+    produced_sections: list[Dict[str, str]] = []
+    prior_context = ""
+    total = len(sections)
+
+    for index, section in enumerate(sections, start=1):
+        title = (section.get("title") or f"Раздел {index}").strip()
+        mode = (section.get("mode") or "ai").strip().lower()
+        prompt_hint = (section.get("prompt") or "").strip()
+        manual_content = (section.get("content") or "").strip()
+
+        if mode == "manual" and manual_content:
+            full_section, body = _normalize_section_output(index, title, manual_content)
+            produced_sections.append({"title": title, "content": body})
+            accumulated_markdown.append(full_section)
+            prior_context = "\n\n".join(accumulated_markdown).strip()
+            if logger:
+                logger(f"Раздел {index} заполнен вручную (символов: {len(body)})")
+            continue
+
+        prompt_parts: list[str] = [base_instruction.strip()]
+
+        meta_lines: list[str] = []
+        if meta:
+            title_meta = meta.get("title") or meta.get("sop_title")
+            number_meta = meta.get("number") or meta.get("sop_number")
+            equipment_meta = meta.get("equipment") or meta.get("equipment_type")
+            if title_meta:
+                meta_lines.append(f"Название: {str(title_meta).strip()}")
+            if number_meta:
+                meta_lines.append(f"Номер: {str(number_meta).strip()}")
+            if equipment_meta:
+                meta_lines.append(f"Оборудование: {str(equipment_meta).strip()}")
+        if meta_lines:
+            prompt_parts.append("\n".join(meta_lines))
+
+        prompt_parts.append(
+            f"Сформируй раздел {index} из {total}: '{title}'. Верни только этот раздел в Markdown."
+        )
+        prompt_parts.append(
+            f"Заголовок раздела должен иметь вид `## {index}. {title}`."
+        )
+        if prompt_hint:
+            prompt_parts.append("Требования пользователя:\n" + prompt_hint)
+        if corpus_summary:
+            prompt_parts.append("Сводка по документации:\n" + corpus_summary.strip())
+        if prior_context:
+            prompt_parts.append(
+                "Контекст предыдущих разделов (не изменяй их, используй только для согласованности):\n"
+                + prior_context
+            )
+
+        section_prompt = "\n\n".join(part for part in prompt_parts if part).strip()
+
+        section_logger = (lambda text, idx=index: logger(f"[SECTION {idx}] {text}")) if logger else None
+        messages = _run_agent_and_get_messages(
+            sop_agent,
+            section_prompt,
+            conversation_logger=section_logger,
+            conversation_label=f"{getattr(sop_agent, 'name', 'Generator')} / {index}",
+        )
+        raw_output = "\n\n".join(
+            m.content for m in messages if isinstance(m, TextMessage)
+        ).strip()
+        raw_output = _extract_clean_sop_content(raw_output)
+        raw_output = _truncate_to_single_section(raw_output)
+
+        full_section, body = _normalize_section_output(index, title, raw_output)
+        produced_sections.append({"title": title, "content": body})
+        accumulated_markdown.append(full_section)
+        prior_context = "\n\n".join(accumulated_markdown).strip()
+
+        if logger:
+            logger(f"Раздел {index} готов (символов: {len(body)})")
+
+    combined_document = "\n\n".join(accumulated_markdown).strip()
+    return combined_document, produced_sections
+
+
 # Apply a strict outline with numbered H2 headers for mandatory sections
 MANDATORY_SECTION_TITLES: list[str] = [
     "Цель и область применения",
@@ -484,6 +609,7 @@ def iterative_generate_until_approved(
     sop_gen: AssistantAgent,
     critic: AssistantAgent,
     base_instruction_builder,
+    sections: List[Dict[str, Any]] | None = None,
     max_iters: int = 5,
     enforce_mandatory_sections: bool = True,
     logger: Callable[[str], None] | None = None,
@@ -501,23 +627,27 @@ def iterative_generate_until_approved(
             except Exception:
                 pass
 
+    sections_list: List[Dict[str, Any]] = [dict(s) for s in sections] if sections else []
+    latest_sections_output: List[Dict[str, str]] = []
+
     for iteration in range(1, max_iters + 1):
         _log(f"Итерация {iteration}: генерация...")
         structural_feedback = ""
 
         try:
-            gen_conv_logger = (lambda text: _log(f"[GENERATOR] {text}"))
-            gen_msgs = _run_agent_and_get_messages(
-                sop_gen,
-                base_instruction_builder(feedback),
-                conversation_logger=gen_conv_logger,
-                conversation_label=getattr(sop_gen, "name", "Generator"),
-            )
-            raw_generated_content = "\n\n".join([m.content for m in gen_msgs if isinstance(m, TextMessage)])
-            # Extract only the clean SOP content from generator
-            clean_sop_content = _extract_clean_sop_content(raw_generated_content)
+            instruction = base_instruction_builder(feedback)
             if enforce_mandatory_sections:
-                # Enforce strict outline formatting (## N. Title)
+                gen_conv_logger = (lambda text: _log(f"[GENERATOR] {text}"))
+                gen_msgs = _run_agent_and_get_messages(
+                    sop_gen,
+                    instruction,
+                    conversation_logger=gen_conv_logger,
+                    conversation_label=getattr(sop_gen, "name", "Generator"),
+                )
+                raw_generated_content = "\n\n".join(
+                    m.content for m in gen_msgs if isinstance(m, TextMessage)
+                )
+                clean_sop_content = _extract_clean_sop_content(raw_generated_content)
                 clean_sop_content = _enforce_strict_outline(clean_sop_content)
                 if auto_backfill_meta is not None:
                     clean_sop_content, _ = _auto_backfill_sections(
@@ -527,8 +657,16 @@ def iterative_generate_until_approved(
                         auto_backfill_summary,
                         logger=_log,
                     )
+                latest_sections_output = []
             else:
-                clean_sop_content = clean_sop_content.strip()
+                clean_sop_content, latest_sections_output = _generate_sections_incrementally(
+                    sop_gen,
+                    instruction,
+                    sections_list,
+                    auto_backfill_meta or {},
+                    auto_backfill_summary,
+                    logger=_log,
+                )
             _log(f"Генерация завершена. Длина: {len(clean_sop_content)} симв.")
         except Exception as e:
             _log(f"Ошибка генератора: {e}")
@@ -588,8 +726,20 @@ def iterative_generate_until_approved(
         if status_approved:
             _log("Документ одобрен критиком.")
             final_content = clean_sop_content
-            return {"content": final_content, "approved": True, "feedback": feedback, "logs": logs}
+            return {
+                "content": final_content,
+                "approved": True,
+                "feedback": feedback,
+                "logs": logs,
+                "sections": latest_sections_output,
+            }
 
         _log("Критик запросил правки. Повтор итерации.")
 
-    return {"content": clean_sop_content, "approved": False, "feedback": feedback, "logs": logs} 
+    return {
+        "content": clean_sop_content,
+        "approved": False,
+        "feedback": feedback,
+        "logs": logs,
+        "sections": latest_sections_output,
+    } 

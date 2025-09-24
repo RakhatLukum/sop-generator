@@ -28,6 +28,9 @@ def run_iterative(title: str, number: str, equipment: str, docs: List[str], sect
     chunks = parse_documents_to_chunks(docs)
     corpus_summary = summarize_parsed_chunks(chunks)
 
+    if not sections:
+        raise ValueError("Необходимо указать хотя бы один раздел (--section)")
+
     def base_instruction_builder(critique: str) -> str:
         return build_generation_instruction(
             sop_title=title,
@@ -45,6 +48,7 @@ def run_iterative(title: str, number: str, equipment: str, docs: List[str], sect
         sop_gen=sop_gen,
         critic=critic,
         base_instruction_builder=base_instruction_builder,
+        sections=sections,
         max_iters=5,
         enforce_mandatory_sections=False,
         logger=_cli_logger,

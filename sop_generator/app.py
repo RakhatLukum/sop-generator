@@ -255,6 +255,10 @@ def run_generation():
     sop_gen = build_sop_generator()
     critic = build_critic()
 
+    if not st.session_state.sections:
+        add_log("Не заданы разделы. Добавьте хотя бы один раздел на вкладке 'Sections'.")
+        return
+
     add_log("Обработка документов...")
     
     # Process global documents
@@ -286,30 +290,29 @@ def run_generation():
         sop_gen=sop_gen,
         critic=critic,
         base_instruction_builder=base_instruction_builder,
+        sections=st.session_state.sections,
         max_iters=5,
         enforce_mandatory_sections=False,
         logger=add_log,
-        auto_backfill_meta=None,
-        auto_backfill_summary=None,
+        auto_backfill_meta={
+            "title": st.session_state.meta.get("title"),
+            "number": st.session_state.meta.get("number"),
+            "equipment": st.session_state.meta.get("equipment"),
+            "equipment_type": st.session_state.meta.get("equipment"),
+        },
+        auto_backfill_summary=corpus_summary if corpus_summary else None,
     )
 
     add_log("Сборка разделов...")
     generated_clean_content = loop_result.get("content", "")
-    
-    # Build single consolidated SOP preview
-    def build_single_preview(content: str, meta: dict) -> list:
-        title = meta.get("title") or "СОП"
-        number = meta.get("number") or ""
-        header_lines = [f"# {title}"]
-        if number:
-            header_lines.append("")
-            header_lines.append(f"Номер: {number}")
-            header_lines.append("")
-        body = content.strip()
-        full = "\n".join(header_lines + [body])
-        return [{"title": title, "content": full}]
-    
-    st.session_state.preview = build_single_preview(generated_clean_content, st.session_state.meta)
+    generated_sections = loop_result.get("sections") or []
+
+    if generated_sections:
+        st.session_state.preview = generated_sections
+    else:
+        # Fallback: pack entire документ в единственный блок
+        title = st.session_state.meta.get("title") or "СОП"
+        st.session_state.preview = [{"title": title, "content": generated_clean_content.strip()}]
 
     add_log("Готово. Статус: " + ("Одобрено" if loop_result.get("approved") else "Нужны правки"))
 
