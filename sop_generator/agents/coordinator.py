@@ -170,37 +170,114 @@ def _extract_clean_sop_content(raw_content: str) -> str:
     return '\n'.join(result_lines).strip()
 
 
-def _truncate_to_single_section(text: str) -> str:
-    """Keep only the first section-sized chunk of text."""
+def _truncate_to_single_section(text: str, index: int, title: str) -> str:
+    """Extract the block that corresponds to the requested section.
+
+    The LLM occasionally responds with the entire SOP even when we ask for a
+    single section. We slice the response to keep only the block whose heading
+    matches the expected `## {index}. {title}` pattern. When no exact match is
+    found we fall back to the first section-sized block to avoid returning an
+    empty string.
+    """
+
     if not text:
         return ""
+
     trimmed = text.strip()
     if not trimmed:
         return ""
 
-    def _slice_from_first_header(header_pattern: str) -> str | None:
-        first = re.search(header_pattern, trimmed)
-        if not first:
-            return None
-        start = first.start()
-        # Look for the next section header starting after the current one
-        next_header = re.search(r"\n##\s+", trimmed[start + 1:])
-        if next_header:
-            end = start + 1 + next_header.start()
-            return trimmed[start:end].strip()
-        return trimmed[start:].strip()
+    normalized_request_title = re.sub(r"[\s\.:;,_-]+", " ", title or "").strip().lower()
 
-    # Prefer numbered H2 sections like "## 1. ..."
-    result = _slice_from_first_header(r"##\s+\d+\.\s+")
-    if result is not None:
-        return result
+    SectionRecord = Dict[str, Any]
+    sections: list[SectionRecord] = []
 
-    # Fallback: grab the first H2 header even without numbering
-    result = _slice_from_first_header(r"##\s+")
-    if result is not None:
-        return result
+    lines = trimmed.splitlines()
+    current_header: str | None = None
+    current_body: list[str] = []
 
-    return trimmed
+    header_pattern = re.compile(r"^##\s+(?P<num>\d+)?[\.)]?\s*(?P<title>.*)$")
+    main_header_detector = re.compile(r"^##(?=\s|\d)")
+
+    def flush_section() -> None:
+        nonlocal current_header, current_body
+        if current_header is None:
+            return
+        header = current_header.strip()
+        match = header_pattern.match(header)
+        section_index: int | None = None
+        section_title = header
+        if match:
+            num = match.group("num")
+            section_title = match.group("title").strip()
+            if num:
+                try:
+                    section_index = int(num)
+                except ValueError:
+                    section_index = None
+        body_text = "\n".join(current_body).strip()
+        sections.append({
+            "header": header,
+            "index": section_index,
+            "title": section_title,
+            "body": body_text,
+        })
+        current_header = None
+        current_body = []
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if main_header_detector.match(stripped):
+            flush_section()
+            current_header = stripped
+            current_body = []
+        else:
+            if current_header is not None:
+                current_body.append(raw_line)
+
+    flush_section()
+
+    def normalize(value: str | None) -> str:
+        if not value:
+            return ""
+        return re.sub(r"[\s\.:;,_-]+", " ", value).strip().lower()
+
+    selected: SectionRecord | None = None
+
+    # 1) Exact match on index and normalized title.
+    for section in sections:
+        if section.get("index") == index and normalize(section.get("title")) == normalized_request_title:
+            selected = section
+            break
+
+    # 2) Match on index only.
+    if selected is None:
+        for section in sections:
+            if section.get("index") == index:
+                selected = section
+                break
+
+    # 3) Match on normalized title only.
+    if selected is None and normalized_request_title:
+        for section in sections:
+            if normalize(section.get("title")) == normalized_request_title:
+                selected = section
+                break
+
+    # 4) Fallback: return the first detected section or the whole text.
+    if selected is None:
+        if sections:
+            selected = sections[0]
+        else:
+            return trimmed
+
+    header_text = str(selected.get("header", "")).strip()
+    body_text = str(selected.get("body", "")).strip()
+
+    if body_text:
+        return f"{header_text}\n{body_text}".strip()
+    return header_text
 
 
 def _normalize_section_output(index: int, title: str, raw_text: str) -> tuple[str, str]:
@@ -272,6 +349,9 @@ def _generate_sections_incrementally(
         prompt_parts.append(
             f"Заголовок раздела должен иметь вид `## {index}. {title}`."
         )
+        prompt_parts.append(
+            "Ответ не должен содержать другие разделы, оглавление, титульные страницы или повтор предыдущего содержимого."
+        )
         if prompt_hint:
             prompt_parts.append("Требования пользователя:\n" + prompt_hint)
         if corpus_summary:
@@ -295,7 +375,7 @@ def _generate_sections_incrementally(
             m.content for m in messages if isinstance(m, TextMessage)
         ).strip()
         raw_output = _extract_clean_sop_content(raw_output)
-        raw_output = _truncate_to_single_section(raw_output)
+        raw_output = _truncate_to_single_section(raw_output, index=index, title=title)
 
         full_section, body = _normalize_section_output(index, title, raw_output)
         produced_sections.append({"title": title, "content": body})
