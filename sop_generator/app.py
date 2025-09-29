@@ -196,7 +196,9 @@ def ui_preview_and_export():
                 st.divider()
             # Allow editing in text area
             st.markdown("**Редактирование:**")
-            sec["content"] = st.text_area("Контент (Markdown поддерживается)", value=content, height=220, key=f"prev_content_{idx}", help="Используйте Markdown для форматирования. Таблицы: | Заголовок | Заголовок | \\n |-------|-------|")
+            new_value = st.text_area("Контент (Markdown поддерживается)", value=content, height=220, key=f"prev_content_{idx}", help="Используйте Markdown для форматирования. Таблицы: | Заголовок | Заголовок | \\n |-------|-------|")
+            if not (new_value.strip() == "" and (content or "").strip() != ""):
+                sec["content"] = new_value
         st.session_state.preview[idx] = sec
 
     st.subheader("Экспорт")
@@ -216,7 +218,7 @@ def ui_preview_and_export():
                 pass
             st.success(f"Сохранено: {out_path}")
             with open(out_path, "rb") as f:
-                st.download_button("Скачать DOCX", f, file_name="sop_generated.docx")
+                st.download_button("Скачать DOCX", f, file_name="sop_generated.docx", key="download_docx")
     with col2:
         if st.button("Экспорт в PDF"):
             out_path = export_to_pdf(st.session_state.preview, os.path.join(tempfile.gettempdir(), "sop_generated.pdf"), st.session_state.meta)
