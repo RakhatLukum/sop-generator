@@ -1,0 +1,21 @@
+version: "3.9"
+services:
+  app:
+    build: .
+    container_name: sop-generator
+    ports:
+      - "8501:8501"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - USE_SIMPLE_AGENT=true
+      # - LLM_TIMEOUT=30
+      # - SOP_DOCX_TEMPLATE_PATH=Структрура_СОП_+_пример_2_3_разделов_+_учет_фармакопеи.docx
+    volumes:
+      - ./:/app
+    command: [
+      "streamlit", "run", "sop_generator/app.py",
+      "--server.address=0.0.0.0",
+      "--server.port=8501",
+      "--server.enableCORS=false",
+      "--server.enableXsrfProtection=false"
+    ] 

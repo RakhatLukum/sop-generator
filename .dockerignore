@@ -1,0 +1,29 @@
+# Git & VCS
+.git
+.gitignore
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.python-version
+.pytest_cache/
+.mypy_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# OS files
+.DS_Store
+
+# Build artifacts / docs / outputs
+/build/
+/dist/
+/docs/
+*.log
+sop_generated.docx
+
+# Streamlit local state (keep project config under sop_generator/.streamlit)
+/.streamlit/ 
