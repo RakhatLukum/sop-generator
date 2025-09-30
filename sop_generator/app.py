@@ -274,6 +274,16 @@ def run_generation():
     chunks = parse_documents_to_chunks(all_docs)
     st.session_state.parsed_chunks = chunks
     corpus_summary = summarize_parsed_chunks(chunks)
+
+    # Build per-section summaries to scope influence of ai+doc uploads
+    per_section_summaries: Dict[int, str] = {}
+    try:
+        for idx, section in enumerate(st.session_state.sections, start=1):
+            if section.get("mode") == "ai+doc" and section.get("documents"):
+                sec_chunks = parse_documents_to_chunks(section.get("documents") or [])
+                per_section_summaries[idx] = summarize_parsed_chunks(sec_chunks)
+    except Exception:
+        per_section_summaries = {}
     
     add_log(f"Обработано документов: {len(all_docs)} (глобальных: {len(st.session_state.uploaded_files or [])}, по разделам: {len(all_docs) - len(st.session_state.uploaded_files or [])})")
 
@@ -303,6 +313,7 @@ def run_generation():
             "equipment_type": st.session_state.meta.get("equipment"),
         },
         auto_backfill_summary=corpus_summary if corpus_summary else None,
+        section_summaries=per_section_summaries or None,
     )
 
     add_log("Сборка разделов...")

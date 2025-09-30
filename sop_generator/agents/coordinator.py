@@ -175,9 +175,9 @@ def _truncate_to_single_section(text: str, index: int, title: str) -> str:
 
     The LLM occasionally responds with the entire SOP even when we ask for a
     single section. We slice the response to keep only the block whose heading
-    matches the expected `## {index}. {title}` pattern. When no exact match is
-    found we fall back to the first section-sized block to avoid returning an
-    empty string.
+    matches the expected `## {index}. {title}` pattern. If the heading number
+    matches but the title differs, we return an empty placeholder for the
+    requested section to avoid cross-section bleed.
     """
 
     if not text:
@@ -245,32 +245,36 @@ def _truncate_to_single_section(text: str, index: int, title: str) -> str:
 
     selected: SectionRecord | None = None
 
-    # 1) Exact match on index and normalized title.
+    # 1) Exact match on index AND normalized title.
     for section in sections:
         if section.get("index") == index and normalize(section.get("title")) == normalized_request_title:
             selected = section
             break
 
-    # 2) Match on index only.
-    if selected is None:
-        for section in sections:
-            if section.get("index") == index:
-                selected = section
-                break
-
-    # 3) Match on normalized title only.
+    # 2) Match on normalized title only.
     if selected is None and normalized_request_title:
         for section in sections:
             if normalize(section.get("title")) == normalized_request_title:
                 selected = section
                 break
 
-    # 4) Fallback: return the first detected section or the whole text.
+    # If we saw a section with the requested index but with a different title,
+    # return a placeholder to avoid mixing content from another section.
     if selected is None:
-        if sections:
-            selected = sections[0]
-        else:
+        index_exists_with_mismatch = any(
+            (s.get("index") == index) and (normalize(s.get("title")) != normalized_request_title)
+            for s in sections
+            if s.get("index") is not None
+        )
+        if index_exists_with_mismatch:
+            return f"## {index}. {title}"
+
+    # Final fallback: if we detected no structured sections at all, return text as-is;
+    # otherwise prefer returning an empty placeholder rather than a wrong block.
+    if selected is None:
+        if not sections:
             return trimmed
+        return f"## {index}. {title}"
 
     header_text = str(selected.get("header", "")).strip()
     body_text = str(selected.get("body", "")).strip()
@@ -306,8 +310,10 @@ def _generate_sections_incrementally(
     meta: Dict[str, Any] | None,
     corpus_summary: str | None,
     logger: Callable[[str], None] | None = None,
+    section_summaries: Dict[int, str] | None = None,
 ) -> tuple[str, List[Dict[str, str]]]:
     accumulated_markdown: list[str] = []
+    accumulated_headers: list[str] = []
     produced_sections: list[Dict[str, str]] = []
     prior_context = ""
     total = len(sections)
@@ -322,7 +328,8 @@ def _generate_sections_incrementally(
             full_section, body = _normalize_section_output(index, title, manual_content)
             produced_sections.append({"title": title, "content": body})
             accumulated_markdown.append(full_section)
-            prior_context = "\n\n".join(accumulated_markdown).strip()
+            accumulated_headers.append(f"## {index}. {title}")
+            prior_context = "\n".join(accumulated_headers).strip()
             if logger:
                 logger(f"Раздел {index} заполнен вручную (символов: {len(body)})")
             continue
@@ -349,16 +356,27 @@ def _generate_sections_incrementally(
         prompt_parts.append(
             f"Заголовок раздела должен иметь вид `## {index}. {title}`."
         )
+        # Strict header guard to reduce misalignment
+        prompt_parts.append(
+            f"Начни ответ строго со строки: '## {index}. {title}'. Ни одного символа до неё. "
+            f"Если не можешь соблюсти формат — верни только эту строку без содержимого."
+        )
         prompt_parts.append(
             "Ответ не должен содержать другие разделы, оглавление, титульные страницы или повтор предыдущего содержимого."
         )
         if prompt_hint:
             prompt_parts.append("Требования пользователя:\n" + prompt_hint)
-        if corpus_summary:
+
+        # Prefer per-section summary when available; otherwise use global
+        section_specific = (section_summaries or {}).get(index, "").strip() if section_summaries else ""
+        if section_specific:
+            prompt_parts.append("Сводка по документации для этого раздела:\n" + section_specific)
+        elif corpus_summary:
             prompt_parts.append("Сводка по документации:\n" + corpus_summary.strip())
+
         if prior_context:
             prompt_parts.append(
-                "Контекст предыдущих разделов (не изменяй их, используй только для согласованности):\n"
+                "Контекст предыдущих разделов (используй только для согласованности, не копируй текст):\n"
                 + prior_context
             )
 
@@ -380,7 +398,8 @@ def _generate_sections_incrementally(
         full_section, body = _normalize_section_output(index, title, raw_output)
         produced_sections.append({"title": title, "content": body})
         accumulated_markdown.append(full_section)
-        prior_context = "\n\n".join(accumulated_markdown).strip()
+        accumulated_headers.append(f"## {index}. {title}")
+        prior_context = "\n".join(accumulated_headers).strip()
 
         if logger:
             logger(f"Раздел {index} готов (символов: {len(body)})")
@@ -709,6 +728,7 @@ def iterative_generate_until_approved(
     logger: Callable[[str], None] | None = None,
     auto_backfill_meta: Dict[str, Any] | None = None,
     auto_backfill_summary: str | None = None,
+    section_summaries: Dict[int, str] | None = None,
 ) -> Dict[str, Any]:
     logs: List[str] = []
     clean_sop_content: str = ""
@@ -760,6 +780,7 @@ def iterative_generate_until_approved(
                     auto_backfill_meta or {},
                     auto_backfill_summary,
                     logger=_log,
+                    section_summaries=section_summaries,
                 )
             _log(f"Генерация завершена. Длина: {len(clean_sop_content)} симв.")
         except Exception as e:
