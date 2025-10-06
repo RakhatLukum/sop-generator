@@ -8,7 +8,6 @@ load_dotenv()
 
 CUSTOM_LLM_BASE = "http://88.204.158.4:8000/v1"
 CUSTOM_LLM_MODEL = "openai/gpt-oss-120b"
-# Define snippet to detect runpod-style hosts to avoid NameError
 RUNPOD_HOST_SNIPPET = "runpod"
 
 @dataclass
