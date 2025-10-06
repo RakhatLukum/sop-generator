@@ -6,14 +6,10 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-
-# Custom LLM server configuration (no-auth)
-CUSTOM_LLM_BASE = "https://hjsl026ghd579m-8000.proxy.runpod.net/v1"
-# The deployed vLLM instance exposes this model under the short identifier below;
-# the longer Hugging Face repo name triggers `model does not exist` errors.
-CUSTOM_LLM_MODEL = "llama4scout"
-RUNPOD_HOST_SNIPPET = "hjsl026ghd579m-8000.proxy.runpod.net"
-
+CUSTOM_LLM_BASE = "http://88.204.158.4:8000/v1"
+CUSTOM_LLM_MODEL = "openai/gpt-oss-120b"
+# Define snippet to detect runpod-style hosts to avoid NameError
+RUNPOD_HOST_SNIPPET = "runpod"
 
 @dataclass
 class LLMConfig:
@@ -454,63 +450,8 @@ STATUS: APPROVED""")
 
 
 def build_openai_chat_client(cfg: Dict[str, Any]):
-    # Validate configuration first
-    api_key = cfg.get("api_key", "")
+    # Minimal, predictable path: always use no-auth OpenAI-compatible HTTP client.
     base_url = cfg.get("base_url", "") or CUSTOM_LLM_BASE
-    
-    # Debug print to see what we're getting from configuration
-    print(f"Debug: API_KEY present: {'YES' if bool(api_key) else 'NO'}")
+    print(f"Debug: API_KEY present: NO (forced no-auth path)")
     print(f"Debug: BASE_URL: {base_url}")
-    
-    # Always use no-auth client for our custom runpod endpoint
-    if RUNPOD_HOST_SNIPPET in base_url:
-        return create_noauth_openai_client({**cfg, "base_url": base_url, "api_key": ""})
-    
-    # If no API key is provided, but base_url is set, use a no-auth client
-    if not api_key and base_url:
-        return create_noauth_openai_client({**cfg, "base_url": base_url})
-    
-    # Try to import real clients with multiple fallbacks
-    try:
-        # Try new autogen structure first
-        from autogen_ext.models.openai import OpenAIChatCompletionClient
-        print("Using autogen_ext OpenAI client")
-    except ImportError as e1:
-        print(f"Warning: autogen_ext.models.openai import failed: {e1}")
-        try:
-            # Try older autogen structure
-            from autogen.models.openai import OpenAIChatCompletionClient
-            print("Using autogen.models.openai client")
-        except ImportError as e2:
-            print(f"Warning: autogen.models.openai import failed: {e2}")
-            try:
-                # Use direct OpenAI client as fallback
-                return create_direct_openai_client({**cfg, "base_url": base_url, "api_key": api_key or "EMPTY"})
-            except ImportError as e3:
-                print(f"Warning: direct OpenAI client creation failed: {e3}")
-                print("Using mock client due to missing dependencies")
-                return MockOpenAIChatCompletionClient(**cfg)
-    
-    create_args = {
-        "model": cfg.get("model"),
-        "api_key": api_key or "EMPTY",
-        "base_url": base_url,
-        "temperature": cfg.get("temperature", 0.3),
-        "max_tokens": cfg.get("max_tokens", 2000),
-        # Ensure messages from multiple agents remain valid for OpenAI-compatible servers
-        "add_name_prefixes": True,
-    }
-    # Only include request_timeout if set to a positive value
-    rt = cfg.get("request_timeout")
-    if isinstance(rt, (int, float)) and rt and rt > 0:
-        create_args["request_timeout"] = rt
-    if _needs_custom_model_info(str(create_args["model"])):
-        create_args["model_info"] = {
-            "vision": False,
-            "function_calling": False,
-            "json_output": False,
-            "structured_output": False,
-            "multiple_system_messages": True,
-            "family": "unknown",
-        }
-    return OpenAIChatCompletionClient(**create_args) 
+    return create_noauth_openai_client({**cfg, "base_url": base_url, "api_key": ""})
