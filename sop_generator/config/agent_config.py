@@ -8,9 +8,9 @@ load_dotenv()
 
 
 # Custom LLM server configuration (no-auth)
-CUSTOM_LLM_BASE = "https://wjvc6cvrspn7v4-8000.proxy.runpod.net/v1"
+CUSTOM_LLM_BASE = "https://hjsl026ghd579m-8000.proxy.runpod.net/v1"
 CUSTOM_LLM_MODEL = "RedHatAI/Llama-4-Scout-17B-16E-Instruct-quantized.w4a16"
-RUNPOD_HOST_SNIPPET = "wjvc6cvrspn7v4-8000.proxy.runpod.net"
+RUNPOD_HOST_SNIPPET = "hjsl026ghd579m-8000.proxy.runpod.net"
 
 
 @dataclass
