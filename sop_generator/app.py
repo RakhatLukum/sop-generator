@@ -71,11 +71,13 @@ def init_session_state() -> None:
 def add_log(message: str) -> None:
     # Be resilient when called from a background thread
     try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        entry = f"[{timestamp}] {message}"
         if "logs" not in st.session_state:
             st.session_state.logs = []
-        st.session_state.logs.append(message)
+        st.session_state.logs.append(entry)
         st.session_state.logs = st.session_state.logs[-500:]
-        print(f"[SOP] {message}", flush=True)
+        print(f"[SOP] {entry}", flush=True)
     except Exception:
         # Best-effort: ignore logging errors from threads without context
         pass
