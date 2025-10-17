@@ -408,6 +408,89 @@ def _generate_sections_incrementally(
     return combined_document, produced_sections
 
 
+def _sections_to_markdown(
+    sections: List[Dict[str, str]], upto: int | None = None
+) -> str:
+    if not sections:
+        return ""
+
+    lines: list[str] = []
+    limit = upto if upto is not None else len(sections)
+
+    for idx, section in enumerate(sections, start=1):
+        if idx > limit:
+            break
+        title = (section.get("title") or f"Раздел {idx}").strip()
+        body = (section.get("content") or "").strip()
+        header = f"## {idx}. {title}"
+        lines.append(f"{header}\n\n{body}".strip())
+
+    return "\n\n".join(lines).strip()
+
+
+_STATUS_TOKEN_RE = re.compile(r"S(\d+)\s*=\s*([A-ZА-Я]+)")
+_GLOBAL_STATUS_RE = re.compile(r"^GLOBAL STATUS\s*:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+
+_APPROVED_TOKENS = {
+    "APPROVED",
+    "UNCHANGED",
+    "OK",
+    "ACCEPTED",
+    "PASS",
+    "ОДОБРЕНО",
+    "БЕЗ_ИЗМЕНЕНИЙ",
+}
+_REVISE_TOKENS = {
+    "REVISE",
+    "REVISION",
+    "REJECT",
+    "REJECTED",
+    "FIX",
+    "CHANGE",
+    "CHANGES",
+    "NEEDS",
+    "TODO",
+    "UPDATE",
+    "ДОРАБОТАТЬ",
+    "ИСПРАВИТЬ",
+    "ОТКЛОНИТЬ",
+    "НЕОДОБРЕНО",
+}
+
+
+def _parse_critic_feedback(feedback: str, current_idx: int) -> dict[str, Any]:
+    statuses: dict[int, str] = {}
+    normalized: dict[int, str] = {}
+    for match in _STATUS_TOKEN_RE.finditer(feedback or ""):
+        section_idx = int(match.group(1))
+        raw_status = match.group(2).upper()
+        statuses[section_idx] = raw_status
+        if any(token in raw_status for token in _REVISE_TOKENS):
+            normalized[section_idx] = "REVISE"
+        elif any(token in raw_status for token in _APPROVED_TOKENS):
+            normalized[section_idx] = "APPROVED"
+        else:
+            normalized[section_idx] = "UNKNOWN"
+
+    if current_idx not in normalized and statuses:
+        # If critic skipped explicit status for current section, treat as unknown
+        normalized[current_idx] = "UNKNOWN"
+
+    failing_sections = sorted(idx for idx, state in normalized.items() if state == "REVISE")
+    current_status = normalized.get(current_idx, "UNKNOWN")
+
+    global_match = _GLOBAL_STATUS_RE.search(feedback or "")
+    global_status_text = global_match.group(1).strip() if global_match else ""
+
+    return {
+        "raw": statuses,
+        "normalized": normalized,
+        "current_status": current_status,
+        "first_revise": failing_sections[0] if failing_sections else None,
+        "global_status": global_status_text,
+    }
+
+
 # Apply a strict outline with numbered H2 headers for mandatory sections
 MANDATORY_SECTION_TITLES: list[str] = [
     "Цель и область применения",
@@ -742,7 +825,7 @@ def iterative_generate_until_approved(
                 pass
 
     sections_list: List[Dict[str, Any]] = [dict(s) for s in sections] if sections else []
-    latest_sections_output: List[Dict[str, str]] = []
+    latest_sections_all: List[Dict[str, str]] = []
 
     for iteration in range(1, max_iters + 1):
         _log(f"Итерация {iteration}: генерация...")
@@ -771,9 +854,9 @@ def iterative_generate_until_approved(
                         auto_backfill_summary,
                         logger=_log,
                     )
-                latest_sections_output = []
+                latest_sections_all = []
             else:
-                clean_sop_content, latest_sections_output = _generate_sections_incrementally(
+                clean_sop_content, latest_sections_all = _generate_sections_incrementally(
                     sop_gen,
                     instruction,
                     sections_list,
@@ -813,23 +896,100 @@ def iterative_generate_until_approved(
                 _log(f"Структурные замечания: {structural_feedback}")
 
         _log("Рецензирование критиком...")
+        status_approved = False
         try:
-            critic_prompt = f"""Оцени документ по протоколу (SUMMARY/ISSUES/STATUS).
+            if latest_sections_all:
+                status_approved = True
+                last_feedback = ""
+                for idx, section in enumerate(latest_sections_all, start=1):
+                    partial_doc = _sections_to_markdown(latest_sections_all, upto=idx)
+                    section_title = section.get("title") or f"Раздел {idx}"
+                    _log(
+                        f"Критик оценивает разделы 1-{idx} (до '{section_title}')"
+                    )
+                    if idx == 1:
+                        scope_hint = "1 (без предыдущих)"
+                        context_hint = "None"
+                    else:
+                        scope_hint = f"{idx} (учитывая {', '.join(str(n) for n in range(1, idx))})"
+                        context_hint = ", ".join(str(n) for n in range(1, idx))
 
-ТЕКСТ СОП:
-{clean_sop_content}
-"""
-            critic_conv_logger = (lambda text: _log(f"[CRITIC] {text}"))
-            critic_msgs = _run_agent_and_get_messages(
-                critic,
-                critic_prompt,
-                conversation_logger=critic_conv_logger,
-                conversation_label=getattr(critic, "name", "Critic"),
-            )
-            critic_texts = [m.content for m in critic_msgs if isinstance(m, TextMessage)]
-            feedback = "\n\n".join(critic_texts)
-            status_approved = any("STATUS:" in t and "APPROVED" in t for t in critic_texts)
-            _log(f"Статус критика: {'APPROVED' if status_approved else 'REVISE'}")
+                    critic_prompt = (
+                        "Оцени документ по надёжному последовательному протоколу.\n"
+                        f"SCOPE укажи как: {scope_hint}.\n"
+                        f"CONTEXT USED перечисли как: {context_hint if context_hint != 'None' else 'None'}.\n"
+                        "Соблюдай формат: SCOPE, CONTEXT USED, SUMMARY, ISSUES (с метками S{N}-LOCAL или XREF(A↔B)), STATUS PER SECTION, GLOBAL STATUS, BLOCKERS / NON-BLOCKERS.\n"
+                        "Для каждой проблемы добавляй краткую рекомендацию.\n"
+                        "Если нужно вернуться к ранним разделам, отметь это в STATUS PER SECTION.\n\n"
+                        "ТЕКСТ СОП:\n"
+                        f"{partial_doc}\n"
+                    )
+                    critic_conv_logger = (lambda text: _log(f"[CRITIC] {text}"))
+                    critic_msgs = _run_agent_and_get_messages(
+                        critic,
+                        critic_prompt,
+                        conversation_logger=critic_conv_logger,
+                        conversation_label=getattr(critic, "name", "Critic"),
+                    )
+                    critic_texts = [
+                        m.content for m in critic_msgs if isinstance(m, TextMessage)
+                    ]
+                    current_feedback = "\n\n".join(critic_texts)
+                    parsed_review = _parse_critic_feedback(current_feedback, idx)
+
+                    if parsed_review.get("global_status"):
+                        _log(f"GLOBAL STATUS: {parsed_review['global_status']}")
+
+                    first_revise = parsed_review.get("first_revise")
+                    current_state = parsed_review.get("current_status")
+
+                    if first_revise is not None and first_revise <= idx:
+                        status_approved = False
+                        feedback = current_feedback
+                        _log(f"Критик требует доработку S{first_revise}.")
+                        break
+
+                    if current_state != "APPROVED":
+                        status_approved = False
+                        feedback = current_feedback
+                        _log(
+                            f"Раздел {idx} имеет статус {current_state}; требуется доработка."
+                        )
+                        break
+
+                    last_feedback = current_feedback
+                else:
+                    feedback = last_feedback
+                    clean_sop_content = _sections_to_markdown(latest_sections_all)
+            else:
+                critic_prompt = (
+                    "Оцени документ по надёжному последовательному протоколу.\n"
+                    "Соблюдай формат: SCOPE, CONTEXT USED, SUMMARY, ISSUES, STATUS PER SECTION, GLOBAL STATUS, BLOCKERS / NON-BLOCKERS.\n"
+                    "ISSUES отмечай с нужными префиксами и рекомендациями.\n\n"
+                    "ТЕКСТ СОП:\n"
+                    f"{clean_sop_content}\n"
+                )
+                critic_conv_logger = (lambda text: _log(f"[CRITIC] {text}"))
+                critic_msgs = _run_agent_and_get_messages(
+                    critic,
+                    critic_prompt,
+                    conversation_logger=critic_conv_logger,
+                    conversation_label=getattr(critic, "name", "Critic"),
+                )
+                critic_texts = [
+                    m.content for m in critic_msgs if isinstance(m, TextMessage)
+                ]
+                feedback = "\n\n".join(critic_texts)
+                parsed_review = _parse_critic_feedback(feedback, 1)
+                if parsed_review.get("global_status"):
+                    _log(f"GLOBAL STATUS: {parsed_review['global_status']}")
+                first_revise = parsed_review.get("first_revise")
+                if first_revise is not None:
+                    status_approved = False
+                else:
+                    status_approved = parsed_review.get("current_status") == "APPROVED"
+                if not status_approved:
+                    _log("Критик требует доработки документа.")
         except Exception as e:
             _log(f"Ошибка критика: {e}")
             break
@@ -846,7 +1006,7 @@ def iterative_generate_until_approved(
                 "approved": True,
                 "feedback": feedback,
                 "logs": logs,
-                "sections": latest_sections_output,
+                "sections": latest_sections_all,
             }
 
         _log("Критик запросил правки. Повтор итерации.")
@@ -856,5 +1016,5 @@ def iterative_generate_until_approved(
         "approved": False,
         "feedback": feedback,
         "logs": logs,
-        "sections": latest_sections_output,
-    } 
+        "sections": latest_sections_all,
+    }
