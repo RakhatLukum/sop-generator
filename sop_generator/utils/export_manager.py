@@ -38,6 +38,42 @@ def _format_markdown_inline_for_pdf(text: str) -> str:
     return formatted.replace('\n', '<br/>')
 
 
+def _compute_table_col_widths(column_lengths: List[int], available_width: float) -> tuple[List[float], float]:
+    """Derive safe column widths and horizontal padding for ReportLab tables."""
+    column_count = len(column_lengths)
+    if column_count == 0:
+        return [], 0.0
+
+    safe_available = max(float(available_width), 1.0)
+    safe_lengths = [max(int(length), 1) for length in column_lengths]
+
+    # Ensure a baseline width for each column while keeping the table inside the frame width.
+    baseline = min(12.0, safe_available / column_count)
+    baseline = max(baseline, 1.0)
+
+    baseline_total = baseline * column_count
+    extra_available = max(safe_available - baseline_total, 0.0)
+
+    total_length = sum(safe_lengths)
+    if total_length <= 0:
+        weights = [1.0 / column_count] * column_count
+    else:
+        weights = [length / total_length for length in safe_lengths]
+
+    col_widths = [baseline + extra_available * weight for weight in weights]
+
+    # Small numerical adjustments can introduce rounding errors; fix the final column accordingly.
+    difference = safe_available - sum(col_widths)
+    if column_count and abs(difference) > 1e-6:
+        col_widths[-1] += difference
+
+    # Pick padding that keeps inner width positive, even for very narrow columns.
+    min_width = min(col_widths) if col_widths else baseline
+    cell_padding = min(4.0, max(0.0, (min_width - 1.0) / 2.0))
+
+    return col_widths, cell_padding
+
+
 def _write_markdown_to_docx(document: Document, content: str, sop_title: str = "") -> None:
     lines = content.splitlines()
     i = 0
@@ -357,9 +393,7 @@ def export_to_pdf(sections: List[Dict[str, Any]], output_path: str, sop_meta: Di
                                 text = row[col_idx] if col_idx < len(row) else ''
                                 column_lengths[col_idx] = max(column_lengths[col_idx], len(text))
 
-                        total_length = sum(column_lengths) or column_count
-                        available_width = doc.width
-                        col_widths = [available_width * (length / total_length) for length in column_lengths]
+                        col_widths, cell_padding = _compute_table_col_widths(column_lengths, doc.width)
 
                         formatted_rows: List[List[Paragraph]] = []
                         for row_index, row in enumerate(table_rows):
@@ -373,7 +407,8 @@ def export_to_pdf(sections: List[Dict[str, Any]], output_path: str, sop_meta: Di
                                 formatted_row.append(Paragraph(formatted_text, style))
                             formatted_rows.append(formatted_row)
 
-                        table = Table(formatted_rows, colWidths=col_widths)
+                        table = Table(formatted_rows, colWidths=col_widths, repeatRows=1)
+                        table.hAlign = 'LEFT'
                         table.setStyle(TableStyle([
                             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
                             ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
@@ -382,10 +417,10 @@ def export_to_pdf(sections: List[Dict[str, Any]], output_path: str, sop_meta: Di
                             ('FONTNAME', (0, 0), (-1, 0), font_bold),
                             ('FONTNAME', (0, 1), (-1, -1), font_name),
                             ('FONTSIZE', (0, 0), (-1, -1), 9),
-                            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-                            ('TOPPADDING', (0, 0), (-1, -1), 4),
-                            ('LEFTPADDING', (0, 0), (-1, -1), 4),
-                            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+                            ('BOTTOMPADDING', (0, 0), (-1, 0), max(4.0, cell_padding + 2.0)),
+                            ('TOPPADDING', (0, 0), (-1, -1), max(2.0, cell_padding)),
+                            ('LEFTPADDING', (0, 0), (-1, -1), cell_padding),
+                            ('RIGHTPADDING', (0, 0), (-1, -1), cell_padding),
                             ('BACKGROUND', (0, 1), (-1, -1), colors.white),
                             ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
                             ('WORDWRAP', (0, 0), (-1, -1), 'LTR')

@@ -17,16 +17,22 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 from datetime import datetime
 import shutil
 
-from sop_generator.agents.coordinator import (
+from sop_generator.config.agent_config import (
+    build_sop_generator,
+    build_critic,
+    build_generation_instruction,
+    summarize_parsed_chunks,
     iterative_generate_until_approved,
 )
-from sop_generator.agents.sop_generator import build_sop_generator
-from sop_generator.agents.critic import build_critic
-from sop_generator.agents.sop_generator import build_generation_instruction
-from sop_generator.utils.export_manager import export_to_docx, export_to_pdf, populate_docx
-from sop_generator.utils.document_processor import parse_documents_to_chunks
-from sop_generator.agents.document_parser import summarize_parsed_chunks
-from sop_generator.utils.template_manager import load_template, apply_styles
+from sop_generator.utils import (
+    parse_documents_to_chunks,
+    load_template,
+    apply_styles,
+    populate_docx,
+    export_to_docx,
+    export_to_pdf,
+)
+
 
 # Enhanced conversation UI disabled in simplified mode
 # from sop_generator.ui.dashboard_components import (
@@ -330,6 +336,17 @@ def run_generation():
         st.session_state.preview = [{"title": title, "content": generated_clean_content.strip()}]
 
     add_log("Готово. Статус: " + ("Одобрено" if loop_result.get("approved") else "Нужны правки"))
+    usage = loop_result.get("token_usage") or {}
+    if usage:
+        usage_parts = []
+        if usage.get("prompt_tokens") is not None:
+            usage_parts.append(f"prompt={usage.get('prompt_tokens')}")
+        if usage.get("completion_tokens") is not None:
+            usage_parts.append(f"completion={usage.get('completion_tokens')}")
+        if usage.get("total_tokens") is not None:
+            usage_parts.append(f"total={usage.get('total_tokens')}")
+        if usage_parts:
+            add_log("Итоговый расход токенов: " + ", ".join(usage_parts))
 
 
 def main():

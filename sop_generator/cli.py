@@ -2,13 +2,13 @@ import os
 import argparse
 from typing import List, Dict, Any
 
-from sop_generator.agents import (
+from sop_generator.config.agent_config import (
     build_sop_generator,
     build_critic,
     build_generation_instruction,
     summarize_parsed_chunks,
+    iterative_generate_until_approved,
 )
-from sop_generator.agents.coordinator import iterative_generate_until_approved
 from sop_generator.utils.document_processor import parse_documents_to_chunks
 
 
